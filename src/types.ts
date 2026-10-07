@@ -1,3 +1,5 @@
+import type { HumanizationConfig } from "./humanize/humanizer";
+
 /**
  * Shared type vocabulary for the whole tool.
  *
@@ -193,6 +195,13 @@ export interface Settings {
     collapsed: boolean;
     size: { w: number; h: number };
   };
+  /**
+   * Deliberate timing variation. Off by default: frame-exact playback is the
+   * honest baseline, and enabling this makes a run intentionally imperfect.
+   * See src/humanize/humanizer.ts for what each control does and for the
+   * ordering invariants the perturbation must not break.
+   */
+  humanization: HumanizationConfig;
 }
 
 /** Outcome of a detection attempt. */

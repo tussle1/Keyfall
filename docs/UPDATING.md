@@ -1,4 +1,4 @@
-# Maintaining this when the site changes
+# Maintaining Keyfall when the site changes
 
 The site is actively developed. This is the triage order.
 
@@ -7,7 +7,7 @@ The site is actively developed. This is the triage order.
 Open devtools on `webosumania.com`, start a map, and run:
 
 ```js
-WebOsuManiaAutoplay.diagnostics()
+Keyfall.diagnostics()
 ```
 
 Read it top-down:
@@ -103,7 +103,7 @@ compare `diagnostics().mapping.codes` against the site's Settings → Keybinds.
 ### Notes fire but timing is off
 
 ```js
-WebOsuManiaAutoplay.diagnostics().clock
+Keyfall.diagnostics().clock
 ```
 
 - `confident: false` after several seconds → the fit is not converging. Check
@@ -117,13 +117,30 @@ WebOsuManiaAutoplay.diagnostics().clock
 Use the Timing Offset slider (±200ms, 1ms steps) for a constant musical
 correction. That is separate from a broken clock model.
 
+### Timing varies when it should not, or does not when it should
+
+```js
+Keyfall.diagnostics().humanization
+```
+
+- `{ enabled: false }` but timing still looks off — it is not humanization. Check
+  `clock` and the Timing Offset instead.
+- `enabled: true` unexpectedly — it persisted from a previous session. Turn it off
+  in Settings → Humanize, or `Keyfall.resetSettings()`.
+- Same seed gives different runs — that is a bug, not a setting. Determinism is
+  tested in `test/humanizer.test.ts`; start with whether `reseed()` is being
+  called on rebuild.
+- Holds are being released early or notes are vanishing on one column — check
+  `clamped` and `releaseClamped`. Rising clamp counts mean the chart is denser
+  than the variation allows; lower `strength`.
+
 ### Everything works but holds are wrong
 
 The hold representation changed. `chart/timeline.ts` pass 1 assumes the site
 stores a hold as a head `tap` (`endTime` = hold end) plus a `hold` object. Verify:
 
 ```js
-WebOsuManiaAutoplay.chart.notes.slice(0, 40)
+Keyfall.chart.notes.slice(0, 40)
 ```
 
 If holds are no longer duplicated, the pre-pass is harmless but `noteCount`
@@ -150,7 +167,7 @@ strategy that throws cannot break the others. Nothing else needs to change:
 ## Step 4: verify
 
 ```bash
-npm run verify     # typecheck + 151 tests + build
+npm run verify     # typecheck + 229 tests + shipped-bundle smoke test
 ```
 
 If you changed timing or ordering behaviour, add a test. The two bugs that were
@@ -168,7 +185,10 @@ Then check by hand against the real site, in this order:
 5. Pause and resume mid-hold. Confirm no stuck key.
 6. Change beatmap without refreshing. Confirm the overlay re-detects.
 7. Close the game mid-hold. Confirm no stuck key.
-8. Enable the site's own Autoplay mod. Confirm the tool refuses to start.
+8. Enable the site's own Autoplay mod. Confirm Keyfall refuses to start.
+9. Enable humanization at strength 1 with hold-release variation and fatigue at
+   maximum, on the densest chart you have. Confirm no stuck key and that every
+   press is matched by a release.
 
 ## Reference
 

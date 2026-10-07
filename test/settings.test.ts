@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { DEFAULT_SETTINGS, OFFSET_MAX, OFFSET_MIN } from "../src/constants";
+import { DEFAULT_SETTINGS, OFFSET_MAX, OFFSET_MIN, STORAGE_KEY } from "../src/constants";
 import { findHotkeyCollisions, SettingsManager } from "../src/core/settings";
 import {
   clamp,
@@ -122,7 +122,7 @@ describe("SettingsManager", () => {
   });
 
   it("survives corrupt stored JSON", () => {
-    env.window.localStorage.setItem("wom-autoplay:settings:v1", "{not json");
+    env.window.localStorage.setItem(STORAGE_KEY, "{not json");
     const settings = new SettingsManager(undefined, env.window);
     assert.deepEqual(settings.all, DEFAULT_SETTINGS);
     settings.dispose();
@@ -130,7 +130,7 @@ describe("SettingsManager", () => {
 
   it("survives stored settings of the wrong shape", () => {
     env.window.localStorage.setItem(
-      "wom-autoplay:settings:v1",
+      STORAGE_KEY,
       JSON.stringify({ timing: { offset: "banana", lookahead: null }, general: 42 }),
     );
     const settings = new SettingsManager(undefined, env.window);
@@ -169,6 +169,78 @@ describe("SettingsManager", () => {
     assert.equal(settings.all.general.showKeyboard, false);
     assert.equal(settings.toggleGeneral("showKeyboard"), true);
     settings.dispose();
+  });
+});
+
+describe("SettingsManager: humanization", () => {
+  it("defaults to off so playback is frame-exact out of the box", () => {
+    const manager = new SettingsManager(undefined, env.window);
+    assert.equal(manager.all.humanization.enabled, false);
+    assert.deepEqual(manager.all.humanization, DEFAULT_SETTINGS.humanization);
+  });
+
+  it("persists a humanization change across instances", () => {
+    const manager = new SettingsManager(undefined, env.window);
+    manager.set("humanization.enabled", true);
+    manager.set("humanization.seed", 424242);
+    manager.set("humanization.strength", 0.8);
+    manager.set("humanization.distribution", "uniform");
+    manager.dispose();
+
+    // Writes are coalesced on a timer, so advance past it before reloading.
+    env.advance(400);
+
+    const reloaded = new SettingsManager(undefined, env.window);
+    assert.equal(reloaded.all.humanization.enabled, true);
+    assert.equal(reloaded.all.humanization.seed, 424242);
+    assert.equal(reloaded.all.humanization.strength, 0.8);
+    assert.equal(reloaded.all.humanization.distribution, "uniform");
+  });
+
+  it("clamps out-of-range weights read back from storage", () => {
+    const manager = new SettingsManager(undefined, env.window);
+    manager.set("humanization.strength", 99);
+    manager.set("humanization.fatigue", -5);
+    assert.equal(manager.all.humanization.strength, 1);
+    assert.equal(manager.all.humanization.fatigue, 0);
+  });
+
+  it("survives corrupted persisted JSON", () => {
+    env.window.localStorage.setItem(STORAGE_KEY, "{not json");
+    const manager = new SettingsManager(undefined, env.window);
+    assert.deepEqual(manager.all.humanization, DEFAULT_SETTINGS.humanization);
+  });
+
+  it("survives a persisted humanization block of the wrong shape", () => {
+    env.window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ humanization: { enabled: "yes", strength: "lots", seed: null, distribution: 7 } }),
+    );
+    const manager = new SettingsManager(undefined, env.window);
+    const h = manager.all.humanization;
+    assert.equal(h.enabled, false, "a non-boolean must not enable it");
+    assert.equal(h.distribution, "gaussian");
+    assert.ok(h.strength >= 0 && h.strength <= 1);
+    assert.ok(Number.isInteger(h.seed) && h.seed >= 0);
+  });
+
+  it("reset() restores humanization defaults", () => {
+    const manager = new SettingsManager(undefined, env.window);
+    manager.set("humanization.enabled", true);
+    manager.set("humanization.strength", 1);
+    manager.reset();
+    assert.deepEqual(manager.all.humanization, DEFAULT_SETTINGS.humanization);
+  });
+
+  it("patch() merges humanization without dropping sibling keys", () => {
+    const manager = new SettingsManager(undefined, env.window);
+    manager.patch({ humanization: { strength: 0.9 } } as never);
+    assert.equal(manager.all.humanization.strength, 0.9);
+    assert.equal(
+      manager.all.humanization.distribution,
+      DEFAULT_SETTINGS.humanization.distribution,
+      "an untouched sibling must survive the merge",
+    );
   });
 });
 

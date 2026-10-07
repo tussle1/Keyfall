@@ -1,3 +1,4 @@
+import type { Humanizer } from "../humanize/humanizer";
 import type { InputAction, KeyMapping, ParsedChart, SiteHitObject } from "../types";
 
 /**
@@ -23,6 +24,15 @@ export interface TimelineOptions {
   secondaryCodes?: (string | null)[];
   /** Extra lead/lag in ms applied when the timeline is built. */
   offset?: number;
+  /**
+   * Optional per-note timing perturbation. Applied here rather than in the
+   * scheduler because it is a property of the *chart interpretation*, not of
+   * playback: it must be baked in before the ordering sort so that chords stay
+   * together and same-column ordering survives. A humanizer with
+   * `enabled: false` returns 0 for every note and consumes no randomness, so an
+   * unhumanised timeline is bit-identical to no humanizer at all.
+   */
+  humanizer?: Humanizer | null;
 }
 
 export interface Timeline {
@@ -60,7 +70,7 @@ const JACK_THRESHOLD_MS = 110;
  * Build the timeline. Pure and synchronous; called once per beatmap.
  */
 export function buildTimeline(chart: ParsedChart, options: TimelineOptions): Timeline {
-  const { keyMapping, useSecondaryKeybind = false, secondaryCodes, offset = 0 } = options;
+  const { keyMapping, useSecondaryKeybind = false, secondaryCodes, offset = 0, humanizer = null } = options;
   const keyCount = chart.keyCount;
 
   if (keyMapping.codes.length < keyCount) {
@@ -93,22 +103,26 @@ export function buildTimeline(chart: ParsedChart, options: TimelineOptions): Tim
     }
   }
 
-  // --- Pass 2: emit actions -------------------------------------------------
+  // --- Pass 2: select the notes that will actually be played ----------------
+  //
+  // The humanizer has to see exactly these notes, in this order, and nothing
+  // else: a dropped hold head would otherwise be counted as a real note and
+  // would shift every drift and fatigue sample after it.
+  const playable: SiteHitObject[] = [];
   for (let i = 0; i < notes.length; i++) {
-    const note: SiteHitObject = notes[i];
+    const note = notes[i];
     const column = note.column;
 
     if (column < 0 || column >= keyCount) {
       // Out-of-range column: skip rather than throw, so one malformed note
-      // can't take down an otherwise playable chart.
+      // cannot take down an otherwise playable chart.
       continue;
     }
-
-    const isHold = note.type === "hold" && note.endTime > note.time;
 
     // A tap carrying a longer endTime is a hold head: the site sets a plain
     // tap's `endTime` equal to its `time`, and only hold heads get the hold's
     // end. The explicit `isHoldHead` flag is used when present.
+    const isHold = note.type === "hold" && note.endTime > note.time;
     const explicitHead = (note as { isHoldHead?: boolean }).isHoldHead === true;
     const isHoldHead =
       !isHold &&
@@ -116,20 +130,55 @@ export function buildTimeline(chart: ParsedChart, options: TimelineOptions): Tim
         (note.endTime > note.time && holdKeys.has(`${note.time}:${column}:${note.endTime}`)));
     if (isHoldHead) continue;
 
-    notePressTimes.push(note.time + offset);
+    playable.push(note);
+  }
+
+  // One preparation pass over the playable notes, before any action is emitted.
+  // A hold's release has to be clamped against the *next* press on its column,
+  // and that press's shifted time is not known until every note delta exists —
+  // so this cannot be done in a single streaming pass.
+  if (humanizer) humanizer.prepare(playable);
+
+  // --- Pass 3: emit actions -------------------------------------------------
+  for (let i = 0; i < playable.length; i++) {
+    const note: SiteHitObject = playable[i];
+    const column = note.column;
+    const isHold = note.type === "hold" && note.endTime > note.time;
+
+    // Humanization delta for this note. Zero when disabled. Reused for both of a
+    // hold's edges so the head and the tail move together and the duration is
+    // preserved; only the release gets its own extra variation on top.
+    const delta = humanizer ? humanizer.deltaAt(i) : 0;
+    const pressTime = note.time + offset + delta;
+
+    notePressTimes.push(pressTime);
     noteIndex++;
 
     const holdDuration = isHold ? note.endTime - note.time : 0;
-    pushAction(actions, note.time + offset, "down", column, keyMapping, useSecondaryKeybind, secondaryCodes, holdDuration);
+    pushAction(actions, pressTime, "down", column, keyMapping, useSecondaryKeybind, secondaryCodes, holdDuration);
 
     if (isHold) {
-      // Release at the hold's end.
-      pushAction(actions, note.endTime + offset, "up", column, keyMapping, useSecondaryKeybind, secondaryCodes, holdDuration);
+      // Release at the hold's end, plus the note's own delta so the duration is
+      // preserved, plus an independent release delta: letting go of a hold is a
+      // separate decision from hitting its head, and players vary it more. The
+      // humanizer clamps it so the tail cannot pass the next press on this
+      // column, which would silently lose that note.
+      const releaseExtra = humanizer ? humanizer.releaseExtraAt(i, note) : 0;
+      pushAction(
+        actions,
+        note.endTime + offset + delta + releaseExtra,
+        "up",
+        column,
+        keyMapping,
+        useSecondaryKeybind,
+        secondaryCodes,
+        holdDuration,
+      );
     } else {
       // Taps: press and release at the same instant, matching the site's own
       // autoplay replay, which emits `[column, time, true]` and
       // `[column, endTime, false]` with `endTime === time` for a tap.
-      pushAction(actions, note.time + offset, "up", column, keyMapping, useSecondaryKeybind, secondaryCodes, 0);
+      pushAction(actions, pressTime, "up", column, keyMapping, useSecondaryKeybind, secondaryCodes, 0);
     }
   }
 

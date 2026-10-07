@@ -753,3 +753,199 @@ describe("stats", () => {
     fake.dispose();
   });
 });
+
+describe("humanization end to end", () => {
+  it("plays a chart with identical timing when humanization is off", () => {
+    const hitObjects = [tap(0, 1000), tap(1, 1400), tap(2, 1800), tap(3, 2200)];
+
+    const run = () => {
+      const fake = createFakeGame({ hitObjects });
+      const settings = new SettingsManager(undefined, env.window);
+      settings.set("general.showOverlay", false);
+      const engine = new Engine({ settings, win: env.window });
+      engine.init();
+      engine.start();
+      for (let t = 0; t <= 2800; t += 10) {
+        fake.game.timeElapsed = t;
+        env.advance(10);
+        env.frame();
+      }
+      const judged = fake.judged.map((j) => [j.type, j.column, j.at]);
+      engine.dispose();
+      fake.dispose();
+      return judged;
+    };
+
+    assert.deepEqual(run(), run(), "two runs of an unhumanised chart must be identical");
+  });
+
+  it("shifts input timing when humanization is enabled, without losing notes", () => {
+    const hitObjects = [
+      tap(0, 1000), tap(1, 1300), tap(2, 1600), tap(3, 1900),
+      tap(0, 2200), tap(1, 2500), tap(2, 2800), tap(3, 3100),
+    ];
+
+    const plain = createFakeGame({ hitObjects });
+    const plainSettings = new SettingsManager(undefined, env.window);
+    plainSettings.set("general.showOverlay", false);
+    const plainEngine = new Engine({ settings: plainSettings, win: env.window });
+    plainEngine.init();
+    plainEngine.start();
+    for (let t = 0; t <= 3600; t += 10) {
+      plain.game.timeElapsed = t;
+      env.advance(10);
+      env.frame();
+    }
+    const plainHits = plain.judged.filter((j) => j.type === "hit");
+
+    const human = createFakeGame({ hitObjects });
+    const humanSettings = new SettingsManager(undefined, env.window);
+    humanSettings.set("general.showOverlay", false);
+    humanSettings.set("humanization.enabled", true);
+    humanSettings.set("humanization.seed", 20261007);
+    humanSettings.set("humanization.strength", 0.5);
+    const humanEngine = new Engine({ settings: humanSettings, win: env.window });
+    humanEngine.init();
+    humanEngine.start();
+    for (let t = 0; t <= 3600; t += 10) {
+      human.game.timeElapsed = t;
+      env.advance(10);
+      env.frame();
+    }
+    const humanHits = human.judged.filter((j) => j.type === "hit");
+
+    // Every note still reaches the site.
+    assert.equal(humanHits.length, plainHits.length, "no notes lost or duplicated");
+    assert.equal(humanHits.length, 8);
+    // Columns and order are untouched — only the timing moves.
+    assert.deepEqual(humanHits.map((h) => h.column), plainHits.map((h) => h.column));
+    // And the timing genuinely differs.
+    assert.notDeepEqual(
+      humanHits.map((h) => h.at),
+      plainHits.map((h) => h.at),
+      "humanization should move the input timing",
+    );
+
+    const stats = humanEngine.humanizationStats;
+    assert.ok(stats, "humanization stats are exposed");
+    assert.ok(stats!.notes > 0);
+    assert.ok(stats!.sdMs > 0, "there is measurable spread");
+
+    assert.deepEqual(human.pressedColumns, [false, false, false, false], "no stuck keys");
+    plainEngine.dispose();
+    plain.dispose();
+    humanEngine.dispose();
+    human.dispose();
+  });
+
+  it("is reproducible from the seed across separate runs", () => {
+    const hitObjects = [tap(0, 1000), tap(1, 1300), tap(2, 1600), tap(3, 1900), tap(0, 2200)];
+
+    const run = () => {
+      const fake = createFakeGame({ hitObjects });
+      const settings = new SettingsManager(undefined, env.window);
+      settings.set("general.showOverlay", false);
+      settings.set("humanization.enabled", true);
+      settings.set("humanization.seed", 777);
+      settings.set("humanization.strength", 0.6);
+      const engine = new Engine({ settings, win: env.window });
+      engine.init();
+      engine.start();
+      for (let t = 0; t <= 2800; t += 10) {
+        fake.game.timeElapsed = t;
+        env.advance(10);
+        env.frame();
+      }
+      const judged = fake.judged.map((j) => [j.type, j.column, j.at]);
+      engine.dispose();
+      fake.dispose();
+      return judged;
+    };
+
+    assert.deepEqual(run(), run(), "same seed must reproduce the same run exactly");
+  });
+
+  it("plays holds correctly with humanization and release variation enabled", () => {
+    // The risky configuration: independent release variation can push a hold's
+    // tail past the next press on that column, which silently loses the note.
+    const hitObjects = [
+      ...holdAsSite(0, 1000, 1800),
+      tap(0, 2000),
+      ...holdAsSite(1, 1200, 2400),
+      tap(0, 2600),
+      ...holdAsSite(0, 3000, 3800),
+      tap(0, 3800),
+      tap(2, 4200),
+    ];
+
+    for (const seed of [1, 2, 3, 11, 99]) {
+      const fake = createFakeGame({ hitObjects });
+      const settings = new SettingsManager(undefined, env.window);
+      settings.set("general.showOverlay", false);
+      settings.set("humanization.enabled", true);
+      settings.set("humanization.seed", seed);
+      settings.set("humanization.strength", 1);
+      settings.set("humanization.holdReleaseVariation", 1);
+      settings.set("humanization.fatigue", 1);
+      settings.set("humanization.longTermDrift", 1);
+      const engine = new Engine({ settings, win: env.window });
+      engine.init();
+      engine.start();
+
+      for (let t = 0; t <= 5000; t += 8) {
+        fake.game.timeElapsed = t;
+        env.advance(8);
+        env.frame();
+      }
+
+      // No key may be left down, and the site must never see a press while the
+      // column is already held (which it would drop).
+      assert.deepEqual(
+        fake.pressedColumns,
+        [false, false, false, false],
+        `stuck key at seed ${seed}: ${JSON.stringify(fake.pressedColumns)}`,
+      );
+      const hits = fake.judged.filter((j) => j.type === "hit").length;
+      const releases = fake.judged.filter((j) => j.type === "release").length;
+      assert.equal(hits, releases, `press/release mismatch at seed ${seed}`);
+      assert.ok(hits >= 6, `expected the notes to reach the site at seed ${seed}, got ${hits}`);
+
+      engine.dispose();
+      fake.dispose();
+    }
+  });
+
+  it("rebuilds the timeline when a humanization setting changes mid-run", () => {
+    const hitObjects = [tap(0, 2000), tap(1, 2400), tap(2, 2800), tap(3, 3200)];
+    const fake = createFakeGame({ hitObjects });
+    const settings = new SettingsManager(undefined, env.window);
+    settings.set("general.showOverlay", false);
+    settings.set("humanization.enabled", true);
+    settings.set("humanization.seed", 5);
+    const engine = new Engine({ settings, win: env.window });
+    engine.init();
+    engine.start();
+
+    fake.game.timeElapsed = 1000;
+    env.advance(16);
+    env.frame();
+    const before = engine.humanizationStats;
+    assert.ok(before, "stats available while running");
+
+    // A rebuild must be reproducible, not a fresh roll of the dice.
+    settings.set("humanization.strength", 0.9);
+    engine.applySettings(settings.all);
+    const after = engine.humanizationStats;
+    assert.ok(after, "stats still available after the rebuild");
+    assert.notDeepEqual(after, before, "the change should alter the perturbation");
+
+    // Turning it off must return to frame-exact timing.
+    settings.set("humanization.enabled", false);
+    engine.applySettings(settings.all);
+    assert.equal(engine.humanizationStats, null, "no humanizer while disabled");
+
+    assert.deepEqual(fake.pressedColumns, [false, false, false, false], "nothing stuck across rebuilds");
+    engine.dispose();
+    fake.dispose();
+  });
+});

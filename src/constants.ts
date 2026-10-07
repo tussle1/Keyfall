@@ -1,10 +1,11 @@
+import { DEFAULT_HUMANIZATION } from "./humanize/humanizer";
 import type { Settings } from "./types";
 
-export const NAME = "Web osu!mania Autoplay";
+export const NAME = "Keyfall";
 export const VERSION = "1.0.0";
 
 /** localStorage key for persisted settings. Versioned so we can migrate. */
-export const STORAGE_KEY = "wom-autoplay:settings:v1";
+export const STORAGE_KEY = "keyfall:settings:v1";
 
 /**
  * Hostnames the tool considers "Web osu!mania".
@@ -126,6 +127,7 @@ export const DEFAULT_SETTINGS: Settings = {
     collapsed: false,
     size: { w: 296, h: 0 },
   },
+  humanization: { ...DEFAULT_HUMANIZATION },
 };
 
 /** Timing offset slider bounds, per spec. */

@@ -15,14 +15,14 @@ import type { EngineStats, HotkeyAction } from "./types";
  * Wires detection, engine, overlay and hotkeys together, and exposes a small
  * console API for manual control and diagnostics:
  *
- *   window.WebOsuManiaAutoplay.start()
- *   window.WebOsuManiaAutoplay.stop()
- *   window.WebOsuManiaAutoplay.diagnostics()
- *   window.WebOsuManiaAutoplay.uninstall()
+ *   window.Keyfall.start()
+ *   window.Keyfall.stop()
+ *   window.Keyfall.diagnostics()
+ *   window.Keyfall.uninstall()
  */
 
-const GLOBAL_NAME = "WebOsuManiaAutoplay";
-const INSTANCE_FLAG = "__womAutoplayInstalled__";
+const GLOBAL_NAME = "Keyfall";
+const INSTANCE_FLAG = "__keyfallInstalled__";
 
 interface Bootstrapped {
   engine: Engine;
@@ -65,6 +65,7 @@ function boot(win: Window): Bootstrapped | null {
           engine.init();
         },
         getDiagnostics: () => engine.getDiagnostics(),
+        getHumanizationStats: () => engine.humanizationStats,
       },
       settings,
     );
@@ -179,6 +180,24 @@ function boot(win: Window): Bootstrapped | null {
         );
       }
       hotkeys.apply(settings.all); // re-check collisions now that codes are known
+    }),
+  );
+
+  offs.push(
+    engine.on("timeline", ({ analysis, humanization }) => {
+      // The chart did not change, but every action's timestamp may have. Refresh
+      // the pattern readout and, when debug is on, say so explicitly — a silent
+      // mid-run reshuffle would be confusing to diagnose otherwise.
+      if (overlay && settings.all.general.debug) {
+        overlay.logDebug(
+          "info",
+          humanization
+            ? `timeline rebuilt with humanization: mean ${humanization.meanMs.toFixed(2)}ms, ` +
+                `sd ${humanization.sdMs.toFixed(2)}ms, ${humanization.clamped} clamped`
+            : "timeline rebuilt: humanization off, timing frame-exact",
+        );
+        overlay.logDebug("info", `patterns: ${analysis.jacks} jacks, ${analysis.chords} chord notes, peak ${analysis.peakNps} NPS`);
+      }
     }),
   );
 

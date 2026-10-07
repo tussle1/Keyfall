@@ -1,6 +1,6 @@
 # The Web osu!mania contract
 
-Everything this tool does depends on a small set of facts about how
+Everything Keyfall does depends on a small set of facts about how
 [Web osu!mania](https://webosumania.com/) is built. They are written down here
 so that when the site changes, the fix is a targeted edit rather than an
 archaeological dig.
@@ -34,7 +34,7 @@ returns nothing). So a synthetic `KeyboardEvent` dispatched on `document` is
 processed identically to a physical keypress, flows through the site's own
 `InputSystem.hit()` / `release()`, and is judged against the site's own clock.
 
-Consequences for this tool:
+Consequences for Keyfall:
 
 - We dispatch `new KeyboardEvent("keydown", { code, key, repeat: false, bubbles: true })`.
   `repeat` **must** be `false` or the site drops it.
@@ -103,7 +103,7 @@ const [game, setGame] = useState<Game | null>(null);
 gameInstance.main(containerRef.current, initialShowHud.current).then(() => setGame(gameInstance));
 ```
 
-So the acquisition chain this tool uses is:
+So the acquisition chain Keyfall uses is:
 
 ```
 window.__PIXI_APP__  →  app.canvas  →  canvas.__reactFiber$…  →  walk up to root
@@ -226,8 +226,15 @@ Two things follow:
    note on that column begins release *before* pressing, instead of swallowing
    the press.
 
-The tool refuses to run while `mods.autoplay` is on: two independent
-schedulers driving one input system would double-fire every note.
+Keyfall refuses to run while `mods.autoplay` is on: two independent schedulers
+driving one input system would double-fire every note.
+
+This also constrains the optional humanization engine. Because a humanized run is
+*deliberately* imperfect, it is not a substitute for the site's Autoplay mod, and
+it is not presented as one: it is off by default, and the frame-exact path is the
+baseline. Nothing about humanization changes what the site receives — the same
+synthetic `keydown`/`keyup` events on `document`, judged by the same
+`InputSystem`, at slightly different moments.
 
 ## 7. Score readback
 
@@ -263,4 +270,5 @@ reached; requests are never modified, blocked or replayed.
 | Moves keybinds out of `settings.keybinds.keyModes` | Auto-mapping fails | Configure the mapping manually in Settings → Input |
 | Changes `.osz` provider or transport | Fallback parser loses its source | Primary path unaffected (it reads the live game) |
 | Switches renderer away from Pixi | `__PIXI_APP__` disappears | Strategies 2/3 |
-| Changes hold representation | Timeline may double-fire | Update `src/chart/timeline.ts` pass 1 |
+| Changes hold representation | Timeline may double-fire | Update pass 1 of `src/chart/timeline.ts`, and `countUniqueNotes` |
+| Changes how holds are stored so the head is no longer a tap | The head dedup stops matching | `isHoldHead` and the `endTime > time` marker are both checked; update `holdKeys` |

@@ -14,6 +14,7 @@ import type {
   Settings,
 } from "../types";
 import type { ChartAnalysis } from "../chart/timeline";
+import type { HumanizationStats } from "../humanize/humanizer";
 import type { SettingsManager } from "../core/settings";
 import { formatTime, groupDigits, humanizeCode, round } from "../util/helpers";
 import { DebugPanel } from "./debug";
@@ -38,16 +39,39 @@ export interface OverlayHost {
   onSettingChange: (settings: Settings) => void;
   onRebindMapping: () => void;
   getDiagnostics: () => Record<string, unknown>;
+  /**
+   * Humanization statistics for the timeline that is actually loaded, or null
+   * when humanization is off. Optional so existing hosts keep compiling.
+   */
+  getHumanizationStats?: () => HumanizationStats | null;
 }
 
-type SettingsTab = "general" | "timing" | "input" | "appearance";
+type SettingsTab = "general" | "timing" | "humanize" | "input" | "appearance";
 
 const TAB_LABELS: Record<SettingsTab, string> = {
   general: "General",
   timing: "Timing",
+  humanize: "Humanize",
   input: "Input",
   appearance: "Appearance",
 };
+
+/**
+ * Humanization sliders, in render order. `syncPanelInputs` relies on this order
+ * matching the order the controls are appended, so keep the two together.
+ */
+const HUMANIZE_SLIDERS: Array<{
+  key: "strength" | "shortTermDrift" | "longTermDrift" | "patternAware" | "holdReleaseVariation" | "fatigue";
+  label: string;
+  unit: string;
+}> = [
+  { key: "strength", label: "Strength", unit: "" },
+  { key: "shortTermDrift", label: "Short drift", unit: "" },
+  { key: "longTermDrift", label: "Long drift", unit: "" },
+  { key: "patternAware", label: "Pattern aware", unit: "" },
+  { key: "holdReleaseVariation", label: "Hold release", unit: "" },
+  { key: "fatigue", label: "Fatigue", unit: "" },
+];
 
 export class Overlay {
   public readonly root: HTMLElement;
@@ -58,6 +82,10 @@ export class Overlay {
 
   private panel!: HTMLElement;
   private header!: HTMLElement;
+  private humanizeEnable: HTMLElement | null = null;
+  private humanizeSeed: HTMLInputElement | null = null;
+  private humanizeDistButtons: HTMLElement[] = [];
+  private humanizeStatsEl: HTMLElement | null = null;
   private mini!: HTMLElement;
   private miniDot!: HTMLElement;
   private miniPhase!: HTMLElement;
@@ -162,7 +190,7 @@ export class Overlay {
     this.miniPhase = miniPhase;
     this.mini = el("div", { className: "wom-mini", dataset: { part: "mini" } }, [
       miniDot,
-      el("span", { className: "wom-mini-label", text: "Autoplay" }),
+      el("span", { className: "wom-mini-label", text: NAME }),
       miniPhase,
       expandBtn,
     ]);
@@ -386,6 +414,89 @@ export class Overlay {
           className: "wom-hint",
           cssText: "text-align:left;margin-top:6px",
           text: "Lookahead arms precise timers ahead of the playhead. Spin window is the bounded busy-wait used for the final sub-millisecond placement — higher is more accurate, costlier.",
+        }),
+      );
+      panel.classList.toggle("wom-hidden", tab !== this.activeTab);
+      return;
+    }
+
+    if (tab === "humanize") {
+      const h = settings.humanization;
+
+      this.humanizeEnable = this.checkbox("Enable humanization", h.enabled, (v) =>
+        this.settingsManager.set("humanization.enabled", v),
+      ) as HTMLElement;
+
+      // Seed as a text field rather than a slider: it is an arbitrary integer,
+      // and being able to type a value back in is what makes a run reproducible.
+      const seedInput = el("input", {
+        className: "wom-text",
+        type: "text",
+        value: String(h.seed),
+        attrs: { title: "Same seed + same chart = identical timing", inputmode: "numeric" },
+      }) as HTMLInputElement;
+      const randomize = el("button", {
+        className: "wom-btn",
+        type: "button",
+        text: "Randomize",
+        attrs: { title: "Pick a new seed" },
+      });
+      this.humanizeSeed = seedInput;
+
+      const commitSeed = (): void => {
+        const parsed = Number(seedInput.value);
+        const next = Number.isFinite(parsed) ? Math.abs(Math.trunc(parsed)) >>> 0 : 0;
+        if (seedInput.value !== String(next)) seedInput.value = String(next);
+        this.settingsManager.set("humanization.seed", next);
+      };
+      this.disposers.push(listen(seedInput, "change", commitSeed));
+      this.disposers.push(
+        listen(randomize, "click", () => {
+          seedInput.value = String((Math.random() * 4294967295) >>> 0);
+          commitSeed();
+        }),
+      );
+
+      const distGauss = el("button", { className: "wom-btn", type: "button", text: "Gaussian" });
+      const distUniform = el("button", { className: "wom-btn", type: "button", text: "Uniform" });
+      this.humanizeDistButtons = [distGauss, distUniform];
+      const setDistribution = (value: "gaussian" | "uniform"): void => {
+        this.settingsManager.set("humanization.distribution", value);
+        this.syncHumanizeDistribution(value);
+      };
+      this.disposers.push(listen(distGauss, "click", () => setDistribution("gaussian")));
+      this.disposers.push(listen(distUniform, "click", () => setDistribution("uniform")));
+      this.syncHumanizeDistribution(h.distribution);
+
+      this.humanizeStatsEl = el("div", { className: "wom-hint", cssText: "text-align:left" });
+
+      panel.append(
+        this.humanizeEnable,
+        el("div", { className: "wom-section-title", text: "Random source" }),
+        el("div", { className: "wom-row" }, [
+          el("span", { className: "wom-row-label", text: "Seed" }),
+          seedInput,
+          randomize,
+        ]),
+        el("div", { className: "wom-row" }, [
+          el("span", { className: "wom-row-label", text: "Distribution" }),
+          distGauss,
+          distUniform,
+        ]),
+        el("div", { className: "wom-section-title", text: "Variation" }),
+        ...HUMANIZE_SLIDERS.map((def) =>
+          this.sliderRow(def.label, 0, 1, 0.05, h[def.key], def.unit, (v) =>
+            this.settingsManager.set(`humanization.${def.key}`, v),
+          ),
+        ),
+        this.humanizeStatsEl,
+        el("div", {
+          className: "wom-hint",
+          cssText: "text-align:left;margin-top:6px",
+          text:
+            "Shifts every note a few milliseconds either side of perfect, reproducibly from the seed. " +
+            "Off by default — frame-exact playback is the baseline. This is for timing practice and " +
+            "experimentation, not for evading detection: every event this tool sends is isTrusted=false.",
         }),
       );
       panel.classList.toggle("wom-hidden", tab !== this.activeTab);
@@ -776,6 +887,33 @@ export class Overlay {
   }
 
   /** Push persisted values back into already-built controls. */
+  private syncHumanizeDistribution(active: "gaussian" | "uniform"): void {
+    const [gauss, uniform] = this.humanizeDistButtons;
+    gauss?.classList.toggle("wom-btn-active", active === "gaussian");
+    uniform?.classList.toggle("wom-btn-active", active === "uniform");
+  }
+
+  /**
+   * Live humanization readout. Sourced from the engine's diagnostics rather than
+   * recomputed here: these are the deltas actually baked into the timeline that
+   * is playing, which is the number worth looking at.
+   */
+  private renderHumanizeStats(): void {
+    const target = this.humanizeStatsEl;
+    if (!target) return;
+    const stats = this.host.getHumanizationStats?.() ?? null;
+    if (!stats) {
+      setText(target, "Humanization off — timing is frame-exact.");
+      return;
+    }
+    setText(
+      target,
+      `${stats.notes} notes · mean ${stats.meanMs >= 0 ? "+" : ""}${round(stats.meanMs, 2)}ms · ` +
+        `sd ${round(stats.sdMs, 2)}ms · range ${round(stats.minMs, 1)}…${round(stats.maxMs, 1)}ms · ` +
+        `clamped ${stats.clamped}`,
+    );
+  }
+
   private syncPanelInputs(tab: SettingsTab, panel: HTMLElement, settings: Settings): void {
     if (tab === "general") {
       const checks = panel.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
@@ -800,6 +938,27 @@ export class Overlay {
         if (ranges[i] && ranges[i].value !== String(v)) ranges[i].value = String(v);
         if (values[i]) setText(values[i], `${round(v, 2)}${unit}`);
       });
+      return;
+    }
+
+    if (tab === "humanize") {
+      const h = settings.humanization;
+      const enable = this.humanizeEnable?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+      if (enable && enable.checked !== h.enabled) enable.checked = h.enabled;
+      if (this.humanizeSeed && this.humanizeSeed.value !== String(h.seed)) {
+        this.humanizeSeed.value = String(h.seed);
+      }
+      this.syncHumanizeDistribution(h.distribution);
+
+      const ranges = panel.querySelectorAll<HTMLInputElement>('input[type="range"]');
+      const values = panel.querySelectorAll<HTMLElement>(".wom-row-value");
+      HUMANIZE_SLIDERS.forEach((def, i) => {
+        const v = h[def.key];
+        if (ranges[i] && ranges[i].value !== String(v)) ranges[i].value = String(v);
+        if (values[i]) setText(values[i], `${round(v, 2)}${def.unit}`);
+      });
+
+      this.renderHumanizeStats();
       return;
     }
 
@@ -981,6 +1140,19 @@ export class Overlay {
     lines.push(
       `Input: held ${input?.held ?? 0} · down ${groupDigits(input?.down ?? 0)} · up ${groupDigits(input?.up ?? 0)} · dup ${input?.duplicatesSuppressed ?? 0} · fail ${input?.failures ?? 0}`,
     );
+    const hum = diagnostics.humanization as any;
+    if (hum?.enabled) {
+      lines.push(
+        `Humanize: seed ${hum.seed} · ${hum.distribution} · strength ${hum.strength} · ` +
+          `mean ${hum.meanMs}ms · sd ${hum.sdMs}ms · range ${hum.minMs}…${hum.maxMs}ms · clamped ${hum.clamped}`,
+      );
+      lines.push(
+        `Patterns: ${hum.patterns?.jacks ?? 0} jacks · ${hum.patterns?.streams ?? 0} streams · ` +
+          `${hum.patterns?.chords ?? 0} chord notes · ${hum.patterns?.holds ?? 0} holds · ${hum.patterns?.isolated ?? 0} isolated`,
+      );
+    } else {
+      lines.push("Humanize: off (frame-exact)");
+    }
     lines.push(`Site state: ${diagnostics.siteState ?? "—"}`);
     if (diagnostics.lastError) lines.push(`Last error: ${diagnostics.lastError}`);
     return lines;

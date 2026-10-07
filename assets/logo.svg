@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Keyfall logo">
+  <!--
+    Keyfall mark: a mania playfield.
+
+    Four columns (the 4K default), notes falling toward the receptors, and the
+    struck receptor lit in the accent colour. Deliberately geometric so it stays
+    legible at 16px in a browser toolbar and at 512px in a repo header.
+
+    Accent #ff6b9d matches the overlay's default accent (src/constants.ts), so
+    the mark and the running UI agree.
+  -->
+  <defs>
+    <linearGradient id="kf-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#161822"/>
+      <stop offset="1" stop-color="#0b0c10"/>
+    </linearGradient>
+    <linearGradient id="kf-lit" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff6b9d" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ff6b9d" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="4" y="4" width="120" height="120" rx="27" fill="url(#kf-bg)"/>
+  <rect x="4.75" y="4.75" width="118.5" height="118.5" rx="26.25" fill="none" stroke="#ffffff" stroke-opacity="0.1"/>
+
+  <!-- Column dividers -->
+  <g stroke="#ffffff" stroke-opacity="0.07" stroke-width="1.5">
+    <line x1="40" y1="20" x2="40" y2="100"/>
+    <line x1="64" y1="20" x2="64" y2="100"/>
+    <line x1="88" y1="20" x2="88" y2="100"/>
+  </g>
+
+  <!-- Light from the struck column -->
+  <rect x="18" y="40" width="20" height="58" fill="url(#kf-lit)"/>
+
+  <!-- Falling notes. The first column's note has reached the receptor; the
+       others are still falling, which is what gives the mark its direction. -->
+  <g fill="#e8e9ef">
+    <rect x="18" y="76" width="20" height="10" rx="3.5" fill="#ff6b9d"/>
+    <rect x="42" y="52" width="20" height="10" rx="3.5" fill-opacity="0.62"/>
+    <rect x="66" y="34" width="20" height="10" rx="3.5" fill-opacity="0.4"/>
+    <rect x="90" y="58" width="20" height="10" rx="3.5" fill-opacity="0.52"/>
+  </g>
+
+  <!-- Receptors -->
+  <g>
+    <rect x="18" y="92" width="20" height="7" rx="3.5" fill="#ff6b9d"/>
+    <rect x="42" y="92" width="20" height="7" rx="3.5" fill="#ffffff" fill-opacity="0.2"/>
+    <rect x="66" y="92" width="20" height="7" rx="3.5" fill="#ffffff" fill-opacity="0.2"/>
+    <rect x="90" y="92" width="20" height="7" rx="3.5" fill="#ffffff" fill-opacity="0.2"/>
+  </g>
+</svg>

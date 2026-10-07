@@ -170,6 +170,32 @@ export function buildCss(accent: string): string {
 .wom-btn:active:not(:disabled) { transform: translateY(1px); }
 .wom-btn:disabled { opacity: .38; cursor: not-allowed; }
 
+/* Selected state for a small toggle group (e.g. the distribution picker). */
+.wom-btn-active {
+  border-color: color-mix(in srgb, var(--wom-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--wom-accent) 16%, transparent);
+  color: var(--wom-text);
+}
+
+/* Free-text field (the humanization seed). Same metrics as .wom-btn so a row
+   mixing a field and a button lines up. */
+.wom-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--wom-border);
+  background: rgba(0,0,0,0.28);
+  color: var(--wom-text);
+  font: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.wom-text:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--wom-accent) 55%, transparent);
+}
+
 .wom-btn[data-kind="start"] { border-color: color-mix(in srgb, var(--wom-accent) 45%, transparent); }
 .wom-btn[data-kind="start"]:hover:not(:disabled) { background: color-mix(in srgb, var(--wom-accent) 20%, transparent); }
 

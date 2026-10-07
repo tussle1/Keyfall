@@ -13,7 +13,9 @@ import { Guards, verifyInputState } from "./guards";
 import { collectStats, notesRemainingAt } from "./stats";
 import { ClockMapper } from "../timing/clock";
 import { Scheduler } from "../timing/scheduler";
-import { InputManager } from "../input/InputManager";
+import { DEFAULT_MIN_TAP_HOLD_MS, InputManager } from "../input/InputManager";
+import { Humanizer } from "../humanize/humanizer";
+import type { HumanizationStats } from "../humanize/humanizer";
 import type { SettingsManager } from "../core/settings";
 import type {
   DetectionResult,
@@ -26,7 +28,7 @@ import type {
   Settings,
 } from "../types";
 import { Emitter } from "../util/emitter";
-import { lowerBound } from "../util/helpers";
+import { lowerBound, round } from "../util/helpers";
 
 /**
  * The autoplay engine.
@@ -45,6 +47,12 @@ import { lowerBound } from "../util/helpers";
 export interface EngineEvents {
   phase: { phase: EnginePhase; reason?: string };
   detected: { chart: ParsedChart; keyMapping: KeyMapping; analysis: ChartAnalysis; via: string };
+  /**
+   * The action timeline was rebuilt without a new beatmap being detected —
+   * because secondary keybinds or humanization settings changed. Carries the
+   * fresh analysis so the UI can update pattern counts mid-run.
+   */
+  timeline: { analysis: ChartAnalysis; humanization: HumanizationStats | null };
   lost: { reason: string };
   stats: EngineStats;
   keyState: { heldColumns: number[]; keyCount: number; codes: string[] };
@@ -58,6 +66,30 @@ export interface EngineOptions {
 }
 
 const SAFE_STOP_MESSAGE = "Autoplay stopped safely.";
+
+/**
+ * A comparable fingerprint of the humanization settings.
+ *
+ * `applySettings` runs on every settings write, and rebuilding the timeline
+ * reshuffles every action, so the rebuild must only happen when something that
+ * actually affects timing changed. Comparing objects field by field would be
+ * easy to get out of sync with the config; a serialised fingerprint cannot.
+ */
+function humanizationSignature(settings: Settings): string {
+  const h = settings.humanization;
+  if (!h.enabled) return "off";
+  return [
+    "on",
+    h.seed >>> 0,
+    h.strength,
+    h.distribution,
+    h.shortTermDrift,
+    h.longTermDrift,
+    h.patternAware,
+    h.holdReleaseVariation,
+    h.fatigue,
+  ].join("|");
+}
 
 export class Engine {
   private settingsManager: SettingsManager;
@@ -83,6 +115,11 @@ export class Engine {
   private detectHandle: number | null = null;
   private statsHandle: number | null = null;
   private monitorHandle: number | null = null;
+  /** Rebuilt with the timeline; null while humanization is off. */
+  private humanizer: Humanizer | null = null;
+  /** What the live timeline was built from, so rebuilds are only done when needed. */
+  private lastTimelineSecondary = false;
+  private lastTimelineHumanization = "";
   private disposed = false;
 
   /** Consecutive failed input-state verifications. */
@@ -326,13 +363,31 @@ export class Engine {
     if (this.keyMapping) {
       this.input.setMapping(this.keyMapping, this.secondaryCodes);
     }
-    if (settings.input.useSecondaryKeybind && this.chart && this.keyMapping) {
-      // Secondary keybinds change the action set, so the timeline must be rebuilt.
+    // Secondary keybinds change the action set, and humanization changes every
+    // action's timestamp, so either requires a rebuild. Compare against the
+    // signature of what the current timeline was built with rather than
+    // rebuilding on every settings write — a slider drag elsewhere would
+    // otherwise reshuffle the whole chart mid-run.
+    const needsRebuild =
+      (settings.input.useSecondaryKeybind && this.lastTimelineSecondary !== true) ||
+      (!settings.input.useSecondaryKeybind && this.lastTimelineSecondary === true) ||
+      humanizationSignature(settings) !== this.lastTimelineHumanization;
+
+    if (needsRebuild && this.chart && this.keyMapping) {
+      this.lastTimelineSecondary = settings.input.useSecondaryKeybind;
+      this.lastTimelineHumanization = humanizationSignature(settings);
       try {
         this.buildTimeline();
         if (this.phase === "RUNNING" && this.timeline) {
+          // Reload from the current playhead so notes already behind us are not
+          // replayed and notes ahead pick up the new timing immediately.
           this.scheduler.load(this.timeline.actions, this.chartTime());
         }
+        const rebuilt = this.timeline!;
+        this.emitter.emit("timeline", {
+          analysis: rebuilt.analysis,
+          humanization: this.humanizationStats,
+        });
       } catch (err) {
         this.log("error", `timeline rebuild failed: ${(err as Error).message}`);
       }
@@ -497,15 +552,48 @@ export class Engine {
       throw new Error("no chart or key mapping available");
     }
     const settings = this.settingsManager.all;
+
+    // Humanization is baked into the timeline rather than applied at fire time,
+    // because it has to survive the ordering sort: chords must stay together and
+    // same-column order must not invert. That means a change to any of its
+    // settings requires a rebuild — see `applySettings`.
+    this.humanizer = settings.humanization.enabled
+      ? new Humanizer({
+          config: settings.humanization,
+          // Must match the InputManager's deferral: the humanizer clamps the
+          // next same-column press against it, so a disagreement between the two
+          // would let a release and a press swap places.
+          minTapHoldMs: DEFAULT_MIN_TAP_HOLD_MS,
+        })
+      : null;
+
     this.timeline = buildTimeline(this.chart, {
       keyMapping: this.keyMapping,
       useSecondaryKeybind: settings.input.useSecondaryKeybind,
       secondaryCodes: this.secondaryCodes,
+      humanizer: this.humanizer,
       // Offset is applied at *schedule* time rather than baked into the
       // timeline, so changing it mid-run takes effect immediately without a
       // rebuild. Kept at 0 here on purpose.
       offset: 0,
     });
+
+    this.lastTimelineSecondary = settings.input.useSecondaryKeybind;
+    this.lastTimelineHumanization = humanizationSignature(settings);
+
+    if (this.humanizer) {
+      const stats = this.humanizer.stats;
+      this.log(
+        "info",
+        `humanization on · seed ${settings.humanization.seed} · strength ${settings.humanization.strength} · ` +
+          `mean ${stats.meanMs.toFixed(2)}ms · sd ${stats.sdMs.toFixed(2)}ms · clamped ${stats.clamped}`,
+      );
+    }
+  }
+
+  /** Humanization statistics for the current timeline, or null when off. */
+  get humanizationStats(): HumanizationStats | null {
+    return this.humanizer?.stats ?? null;
   }
 
   /* ------------------------------- clock ------------------------------ */
@@ -928,6 +1016,22 @@ export class Engine {
       },
       siteState: this.game?.state ?? null,
       timeElapsed: Number.isFinite(this.chartTime()) ? this.chartTime() : null,
+      humanization: this.humanizationStats
+        ? {
+            enabled: true,
+            seed: this.settingsManager.all.humanization.seed,
+            strength: this.settingsManager.all.humanization.strength,
+            distribution: this.settingsManager.all.humanization.distribution,
+            nominalSdMs: round(this.humanizer?.nominalSdMs ?? 0, 2),
+            meanMs: round(this.humanizationStats.meanMs, 2),
+            sdMs: round(this.humanizationStats.sdMs, 2),
+            minMs: round(this.humanizationStats.minMs, 2),
+            maxMs: round(this.humanizationStats.maxMs, 2),
+            meanAbsMs: round(this.humanizationStats.meanAbsMs, 2),
+            clamped: this.humanizationStats.clamped,
+            patterns: this.humanizationStats.patterns,
+          }
+        : { enabled: false },
       lastError: this.lastError || null,
     };
   }

@@ -40,7 +40,7 @@ function resolvePath(pathname) {
   const clean = normalize(decodeURIComponent(pathname)).replace(/^(\.\.[/\\])+/, "");
 
   if (clean === "/" || clean === "/index.html") return join(root, "demo", "index.html");
-  if (clean === "/autoplay.js") return join(root, "dist", "autoplay.js");
+  if (clean === "/keyfall.js") return join(root, "dist", "keyfall.js");
   if (clean.startsWith("/demo/")) return join(root, clean);
   if (clean.startsWith("/dist/")) return join(root, clean);
 
@@ -63,7 +63,7 @@ const server = createServer(async (req, res) => {
     const info = await stat(file).catch(() => null);
     if (!info || !info.isFile()) {
       res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-      res.end(`404 — ${url.pathname}\n\nRun "npm run build" first if /autoplay.js is missing.`);
+      res.end(`404 — ${url.pathname}\n\nRun "npm run build" first if /keyfall.js is missing.`);
       return;
     }
 
@@ -82,10 +82,10 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log("");
-  console.log(`  Web osu!mania Autoplay — sandbox demo`);
+  console.log(`  Keyfall — sandbox demo`);
   console.log(`  http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${PORT}/`);
   console.log("");
-  console.log(`  Serving dist/autoplay.js as /autoplay.js`);
+  console.log(`  Serving dist/keyfall.js as /keyfall.js`);
   console.log(`  Rebuild with: npm run build`);
   console.log("");
 });

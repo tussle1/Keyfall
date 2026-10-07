@@ -9,6 +9,7 @@ import {
 } from "../constants";
 import type { HotkeyAction, Settings } from "../types";
 import { clamp, deepMerge } from "../util/helpers";
+import { sanitizeHumanization } from "../humanize/humanizer";
 import { Emitter } from "../util/emitter";
 
 /**
@@ -92,6 +93,11 @@ export class SettingsManager {
     out.general.showOverlay = out.general.showOverlay !== false;
     out.general.showKeyboard = out.general.showKeyboard !== false;
     out.general.debug = !!out.general.debug;
+
+    // Humanization: values arrive from localStorage or from a slider, so run
+    // them through the same clamp-everything path as the rest. A persisted
+    // `enabled: true` is honoured, but an out-of-range strength cannot be.
+    out.humanization = sanitizeHumanization(out.humanization);
 
     // Key mappings: drop anything malformed rather than trusting it.
     const clean: Record<string, string[]> = {};

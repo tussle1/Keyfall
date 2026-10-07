@@ -56,7 +56,14 @@ interface HeldEntry {
   releaseAtChart: number;
 }
 
-const DEFAULT_MIN_TAP_HOLD_MS = 12;
+/**
+ * How long a tap's release is deferred after its press.
+ *
+ * Exported because the humanizer needs the same number: its ordering clamp must
+ * keep the next same-column press outside this window, or the deferred release
+ * and the new press would swap places.
+ */
+export const DEFAULT_MIN_TAP_HOLD_MS = 12;
 
 export class InputManager {
   private target: EventTarget;

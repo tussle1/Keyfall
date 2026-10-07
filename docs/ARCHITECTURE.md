@@ -1,4 +1,4 @@
-# Architecture
+# Keyfall architecture
 
 ```
                     ┌──────────────────────────────────────────┐
@@ -42,21 +42,32 @@
 Data flow for one beatmap:
 
 ```
-Game detected → ParsedChart → Timeline (InputAction[]) → Scheduler
-                                                            │
-                                     ClockMapper ◄──────────┤
-                                                            ▼
-                                                     InputManager
-                                                            │
-                                                            ▼
-                                              document KeyboardEvents
-                                                            │
-                                                            ▼
-                                          site's InputSystem.hit/release
-                                                            │
-                                                            ▼
-                                          site's ScoreSystem → stats readback
+Game detected → ParsedChart ─┐
+                             ├→ Humanizer.prepare()   (optional; per-note deltas
+ChartAnalysis ◄──────────────┘                          and release ceilings)
+                             │
+                             ▼
+                    Timeline (InputAction[])
+                             │
+                             ▼
+                        Scheduler ────► ClockMapper (host ↔ chart time)
+                             │
+                             ▼
+                       InputManager
+                             │
+                             ▼
+                 document KeyboardEvents
+                             │
+                             ▼
+            site's InputSystem.hit/release
+                             │
+                             ▼
+            site's ScoreSystem → stats readback
 ```
+
+Humanization sits between the parsed chart and the timeline rather than between
+the timeline and the scheduler. See
+[Humanization](#humanization-why-it-is-baked-into-the-timeline) below.
 
 ## Module responsibilities
 
@@ -69,6 +80,8 @@ Game detected → ParsedChart → Timeline (InputAction[]) → Scheduler
 | `detect/osuFileParser` | `.osu` text → chart (fallback) | Reading the live game |
 | `detect/chartSource` | Read-only `.osz` observation + minimal ZIP reader | Modifying any request |
 | `chart/timeline` | Chart → ordered `InputAction[]`, pattern analysis | Timing or input |
+| `humanize/humanizer` | Reproducible per-note timing deltas and release ceilings | Knowing what a key is |
+| `util/rng` | Seeded PRNG, uniform and normal sampling | Any policy decision |
 | `timing/clock` | `performance.now()` ↔ chart-time linear model | Deciding what to fire |
 | `timing/scheduler` | Look-ahead arming, catch-up, batching, cursor | Knowing what a note is |
 | `input/InputManager` | Synthetic key events, held-state tracking | Deciding *when* |
@@ -199,9 +212,66 @@ no-op on an unchanged value, so DOM writes are proportional to actual change.
 The debug panel buffers and flushes on an interval instead of appending per
 event, and when debug mode is off it allocates nothing at all.
 
+### Humanization: why it is baked into the timeline
+
+It would be simpler to perturb each action at fire time. That does not work, for
+two reasons that are both about *ordering* rather than timing:
+
+- A chord is several notes at one timestamp. Perturbing each action
+  independently spreads them apart, turning a chord into a rapid arpeggio. The
+  delta has to be computed per *timestamp* and shared.
+- The timeline's sort is what guarantees a hold ending exactly where the next
+  note on that column begins releases before pressing. Perturbing after the sort
+  cannot preserve that.
+
+So deltas are applied before the sort, and `chart/timeline.ts` runs three passes:
+collect hold keys, select the playable notes, emit actions.
+
+The selection pass matters more than it looks. The humanizer must see exactly the
+notes that will be played, in order, and nothing else — a dropped hold head would
+otherwise consume a drift sample and shift everything after it.
+
+**Two passes inside the humanizer, too.** A hold's release has to be clamped
+against the *next* press on that column, and that press's shifted time is not
+known until every note delta exists. A single streaming pass cannot do this: it
+would clamp against a ceiling that has not been computed yet, and a late release
+would swallow the next note — the site's `hit()` early-returns while the column is
+down, so the press is dropped and the key stays pinned. `prepare()` therefore
+computes every delta and every release ceiling up front, and reading an edge
+afterwards is a pure lookup. That also makes the result independent of call
+ordering.
+
+**Determinism has one non-obvious failure mode.** The Gaussian sampler caches one
+value per pair (Marsaglia polar). Rewinding only the PRNG state on `reseed()`
+left that spare behind, so consecutive runs *alternated* between two sequences
+instead of repeating one. It surfaced as fatigue-dependent non-reproducibility,
+because fatigue happens to draw an odd number of samples for many chart lengths.
+`reseed()` clears the spare; there is a regression test that sweeps both
+parities.
+
+**Drift is bounded, not just mean-reverting.** An Ornstein–Uhlenbeck process
+returns to zero in expectation, which is not a guarantee on any finite run. Both
+drift processes get a hard clamp, because "the wobble cannot become an accidental
+offset" is a property worth enforcing rather than assuming — that is what the
+Timing Offset control is for.
+
+**Pattern awareness tightens intervals, not just variance.** Reducing the sd
+inside a jack is not enough: what a player keeps consistent in a repeated pattern
+is the *interval* between hits, not the absolute offset. So a jack blends toward
+the previous note's delta at `patternAware` weight. At full pattern awareness a
+perfect jack keeps its spacing almost exactly while the run as a whole still
+wanders.
+
+**Chords are not a pattern.** Classification looks backwards at one note's own
+column, so it cannot see a group property. `chord` was removed from the pattern
+enum: chords are handled by delta sharing and counted separately as
+`chordMembers`. An earlier version tried to reclassify a chord's first member
+retrospectively, which made the counts depend on arrival order.
+
 ## Testing
 
-151 tests, `node --test`, no test framework dependency.
+229 tests, `node --test`, no test framework dependency, plus a 28-check smoke test
+that runs the shipped bundle.
 
 Node strips TypeScript types natively (≥22.18) but still requires fully
 specified ESM paths, while the source uses extensionless imports (correct for a
@@ -216,6 +286,15 @@ Coverage: `.osu` parsing (1K–18K, holds, mirror, holdOff, delay, audio offset,
 playback rate, malformed input, rejection cases), timeline ordering and
 deduplication, clock fitting and discontinuity classification, scheduler
 ordering/batching/catch-up/seek/pause/stop, input dispatch including the jack
-regression, settings validation and persistence, and 24 end-to-end tests that
-drive a stubbed site through the real engine — including "no stuck keys" on
-stop, emergency stop, dispose, play failure and game disappearance.
+regression, settings validation and persistence, seeded RNG distributions,
+humanization determinism and its ordering invariants, and 32 end-to-end tests that
+drive a stubbed site through the real engine — including "no stuck keys" on stop,
+emergency stop, dispose, play failure and game disappearance, and humanized
+playback across five seeds with holds, release variation, fatigue and drift all
+at maximum.
+
+The humanization tests are written to fail on the silent breakages rather than the
+audible ones. "Every press was released" and "presses and releases alternate per
+column" are asserted across seeds; "the timing sounds human" is not asserted at
+all, because nothing can check that and a test that pretends to would only hide a
+regression.

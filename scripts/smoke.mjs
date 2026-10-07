@@ -140,7 +140,7 @@ const check = (name, condition, detail = "") => {
   results.push({ name, ok: !!condition, detail });
 };
 
-const bundlePath = resolve(root, "dist/autoplay.js");
+const bundlePath = resolve(root, "dist/keyfall.js");
 let code;
 try {
   code = await readFile(bundlePath, "utf8");
@@ -160,8 +160,8 @@ try {
   check("bundle evaluates without throwing", false, err?.message ?? String(err));
 }
 
-const api = env.window.WebOsuManiaAutoplay;
-check("exposes window.WebOsuManiaAutoplay", !!api);
+const api = env.window.Keyfall;
+check("exposes window.Keyfall", !!api);
 
 if (api) {
   check("version is reported", typeof api.version === "string" && api.version.length > 0, api.version);
@@ -211,10 +211,70 @@ if (api) {
   );
 
   const after = api.diagnostics();
+  check("humanization is off by default", after.humanization?.enabled === false,
+    JSON.stringify(after.humanization));
   check("scheduler fired actions", after.scheduler.fired > 0, String(after.scheduler.fired));
   check("clock model converged", after.clock.samples > 5, `${after.clock.samples} samples`);
   check("no dropped actions", after.scheduler.dropped === 0, String(after.scheduler.dropped));
   check("no input failures", after.input.failures === 0, String(after.input.failures));
+
+  /* ------------------- humanization, through the bundle ------------------- */
+
+  api.emergencyStop();
+  fake.judged.length = 0;
+  const exact = fake.judged.filter((j) => j.type === "down").map((j) => j.at);
+
+  // Rebuild the fake clock so the second run starts clean.
+  fake.game.timeElapsed = 0;
+  fake.pressedColumns.fill(false);
+
+  api.settings.set("humanization.enabled", true);
+  api.settings.set("humanization.seed", 20261007);
+  api.settings.set("humanization.strength", 0.8);
+  api.settings.set("humanization.holdReleaseVariation", 1);
+  api.start();
+  check("humanized run reaches RUNNING", api.phase === "RUNNING", String(api.phase));
+
+  for (let t = 0; t <= 3200; t += 16) {
+    fake.game.timeElapsed = t;
+    env.advance(16);
+    env.frame();
+  }
+
+  const humDiag = api.diagnostics();
+  check("humanization reports enabled in diagnostics", humDiag.humanization?.enabled === true,
+    JSON.stringify(humDiag.humanization));
+  // `notes` is on HumanizationStats but deliberately not echoed into
+  // diagnostics — the chart note count is already reported there. Assert on a
+  // field that actually exists.
+  check("humanization statistics are populated", Number.isFinite(humDiag.humanization?.meanAbsMs),
+    String(humDiag.humanization?.meanAbsMs));
+  check("humanization counted the chord and the hold",
+    humDiag.humanization?.patterns?.chordMembers === 1 && humDiag.humanization?.patterns?.holds === 1,
+    JSON.stringify(humDiag.humanization?.patterns));
+  check("humanization produced measurable spread", humDiag.humanization?.sdMs > 0,
+    String(humDiag.humanization?.sdMs));
+  check("the seed is reported back", humDiag.humanization?.seed === 20261007,
+    String(humDiag.humanization?.seed));
+
+  const humDowns = fake.judged.filter((j) => j.type === "down");
+  const humUps = fake.judged.filter((j) => j.type === "up");
+  check("humanized run played the notes", humDowns.length >= 6, `${humDowns.length} presses`);
+  check("humanized run released every press", humUps.length === humDowns.length,
+    `${humUps.length} releases vs ${humDowns.length} presses`);
+  check("humanized run left nothing stuck", fake.pressedColumns.every((p) => !p),
+    JSON.stringify(fake.pressedColumns));
+  check("humanized run dropped no actions", humDiag.scheduler.dropped === 0,
+    String(humDiag.scheduler.dropped));
+
+  // The hold must still be held for roughly its full duration. With release
+  // variation at maximum this is the invariant most likely to break.
+  const humHoldDown = humDowns.find((j) => j.column === 2);
+  const humHoldUp = humUps.find((j) => j.column === 2 && j.at > (humHoldDown?.at ?? 0) + 300);
+  check("the hold survived humanization", !!humHoldUp,
+    humHoldDown ? `down at ${humHoldDown.at}` : "no down");
+  check("no input failures while humanized", humDiag.input.failures === 0,
+    String(humDiag.input.failures));
 
   // Emergency stop must be clean even after completion.
   api.emergencyStop();
@@ -222,7 +282,7 @@ if (api) {
   check("emergency stop leaves nothing held", fake.pressedColumns.every((p) => !p));
 
   api.uninstall();
-  check("uninstall removes the global", !env.window.WebOsuManiaAutoplay);
+  check("uninstall removes the global", !env.window.Keyfall);
   check("uninstall removes the overlay", !api.overlayElement || !api.overlayElement.isConnected);
 }
 
@@ -230,7 +290,7 @@ if (api) {
 
 const failed = results.filter((r) => !r.ok);
 console.log("");
-console.log("  Bundle smoke test — dist/autoplay.js");
+console.log("  Bundle smoke test — dist/keyfall.js");
 console.log("  " + "─".repeat(62));
 for (const r of results) {
   const mark = r.ok ? "✓" : "✗";
