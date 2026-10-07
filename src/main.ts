@@ -104,6 +104,7 @@ function boot(win: Window): Bootstrapped | null {
       }
     },
     getSiteCodes: () => engine.currentMapping?.codes ?? [],
+    isCapturing: () => overlay?.isCapturing ?? false,
     onCollision: (collisions) => {
       const list = collisions.map((c) => `${c.action}=${humanizeCode(c.code)}`).join(", ");
       console.warn(

@@ -367,12 +367,12 @@ no size limit and survives navigation.
    then correct for your output latency.
 6. **Optionally enable humanization.** Settings → Humanize. Pick a seed, set a
    strength, and watch the statistics readout.
-7. **Start.** Press `F7` or click START.
+7. **Start.** Press `G` or click START.
 8. **Monitor.** Status, notes remaining, accuracy, combo and score update live.
-   The keyboard visualisation lights as columns are pressed. Press `F6` twice to
+   The keyboard visualisation lights as columns are pressed. Press `H` twice to
    collapse to the mini bar if it is in the way.
-9. **Stop or restart.** `F9` stops and releases everything. `F8` pauses and
-   resumes. `F10` is the emergency stop — total reset, every key released,
+9. **Stop or restart.** `X` stops and releases everything. `B` pauses and
+   resumes. `Z` is the emergency stop — total reset, every key released,
    detection re-armed. Changing beatmap needs no action: the new chart is picked
    up without a refresh.
 
@@ -439,7 +439,7 @@ See the [humanization table](#configuration-1). Off by default.
 |---|---|---|
 | Key mapping | Per-key-count overrides; click a column, then press a key | Read from the site |
 | Use secondary keybind | Press both of a column's bindings when the site has two | Off |
-| Hotkeys | Reconfigurable; warns on collision with a site keybind | F6 – F10 |
+| Hotkeys | Reconfigurable; warns on collision with a site keybind | H G B X Z |
 
 ### Appearance
 
@@ -482,13 +482,18 @@ both, which matters if your own setup expects it.
 
 | Key | Action |
 |---|---|
-| `F6` | Toggle UI (panel ⇄ mini bar ⇄ hidden) |
-| `F7` | Start |
-| `F8` | Pause / resume |
-| `F9` | Stop |
-| `F10` | **Emergency stop** — releases every key immediately, full reset |
+| `H` | Toggle UI (panel ⇄ mini bar ⇄ hidden) |
+| `G` | Start |
+| `B` | Pause / resume |
+| `X` | Stop |
+| `Z` | **Emergency stop** — releases every key immediately, full reset |
 
-All five are reconfigurable in Settings → Input. The manager only acts on trusted
+The defaults are letters chosen from the set that appears in *no* column layout
+at any key count, so a hotkey can never double as a column key. All five are
+reconfigurable in Settings → Input: click a key chip, press the new key (the
+chip glows and reads "press a key…" while listening), `Esc` cancels, and
+**Reset hotkeys to defaults** puts H G B X Z back. Binding a key that another
+Keyfall action already uses is refused with a notice. The manager only acts on trusted
 events, in the capture phase, and ignores `repeat` and any ctrl/meta/alt
 combination — so a hotkey never also registers as a column hit. If you bind a
 hotkey to a code the site uses as a column keybind, you get a warning.
@@ -594,7 +599,7 @@ cosmetic bug: it drains HP, breaks the run, and persists into the next screen.
 
 All failure paths end with the same message: **`Autoplay stopped safely.`**
 
-**Emergency stop (`F10`)** is the unconditional version: release every key, halt
+**Emergency stop (`Z`)** is the unconditional version: release every key, halt
 the scheduler, drop the chart, hard-reset the clock, and re-arm detection. It
 works from any phase, including mid-hold and during an error.
 
@@ -652,7 +657,7 @@ snapshot separates scheduler error from all of these.
 
 ### Keys become stuck
 
-Press `F10`. That releases every key unconditionally and resets the engine.
+Press `Z`. That releases every key unconditionally and resets the engine.
 
 This should not happen: the state monitor polls at 100ms, the watchdog at 500ms,
 and lifecycle listeners cover tab-hide, blur and unload. If you can reproduce a
@@ -744,7 +749,7 @@ reports which one succeeded, and that string appears in `diagnostics().via`.
 `npm run demo` serves a sandbox containing a stub that implements the documented
 site contract (`demo/stub-game.js`) and the real, unmodified bundle running
 against it. Pick a chart — 4K with holds and chords, a 7K stream, or a 10K map —
-press **Play**, then press **F7**.
+press **Play**, then press **G**.
 
 It is a demonstration harness, not a port of the game. It exists so the bundle's
 detection, clock fitting, scheduling, humanization and input paths can be

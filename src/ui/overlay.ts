@@ -1,10 +1,20 @@
 import {
+  DEFAULT_SETTINGS,
   MAX_KEY_COUNT,
   NAME,
   OFFSET_MAX,
   OFFSET_MIN,
   VERSION,
 } from "../constants";
+
+/** Display names for the rebindable hotkeys, shared by the list and notices. */
+const HOTKEY_LABELS: Record<HotkeyAction, string> = {
+  toggleUI: "Toggle UI",
+  start: "Start",
+  pause: "Pause",
+  stop: "Stop",
+  emergency: "Emergency stop",
+};
 import type {
   EnginePhase,
   EngineStats,
@@ -118,6 +128,8 @@ export class Overlay {
   private mappingCells: HTMLElement[] = [];
   private hotkeyCells = new Map<HotkeyAction, HTMLElement>();
   private listeningFor: { kind: "mapping" | "hotkey"; index: number } | null = null;
+  private listeningCell: HTMLElement | null = null;
+  private listenOriginalText: string | null = null;
 
   private phase: EnginePhase = "IDLE";
   private chart: ParsedChart | null = null;
@@ -218,7 +230,10 @@ export class Overlay {
       type: "button",
       attrs: { title: "Emergency stop — release every key immediately" },
     });
-    this.hintEl = el("div", { className: "wom-hint", text: "F10 emergency stop" });
+    this.hintEl = el("div", {
+      className: "wom-hint",
+      text: `${humanizeCode(this.settingsManager.all.input.hotkeys.emergency)} emergency stop`,
+    });
 
     // --- metrics ---
     this.metrics = {};
@@ -523,10 +538,32 @@ export class Overlay {
 
       const hotkeySection = el("div", { className: "wom-section" }, [
         el("div", { className: "wom-section-title", text: "Hotkeys" }),
-        el("div", { className: "wom-hint", cssText: "text-align:left;margin-bottom:6px", text: "Click an action, then press a key." }),
+        el("div", {
+          className: "wom-hint",
+          cssText: "text-align:left;margin-bottom:6px",
+          text: "Click a key chip, then press any key to rebind it. Esc cancels. A chip glows while it is listening.",
+        }),
       ]);
       this.hotkeyList = el("div", {});
       hotkeySection.appendChild(this.hotkeyList);
+
+      const defaultList = (Object.keys(HOTKEY_LABELS) as HotkeyAction[])
+        .map((a) => `${HOTKEY_LABELS[a]}: ${humanizeCode(DEFAULT_SETTINGS.input.hotkeys[a])}`)
+        .join(", ");
+      const resetHotkeys = el("button", {
+        className: "wom-toggle-btn",
+        text: "Reset hotkeys to defaults",
+        type: "button",
+        cssText: "margin-top:6px",
+        attrs: { title: defaultList },
+      });
+      this.disposers.push(
+        listen(resetHotkeys, "click", () => {
+          this.settingsManager.set("input.hotkeys", { ...DEFAULT_SETTINGS.input.hotkeys });
+          this.setNotice("ok", `Hotkeys reset to defaults (${defaultList}).`);
+        }),
+      );
+      hotkeySection.appendChild(resetHotkeys);
 
       panel.append(mapSection, secondary, hotkeySection);
       panel.classList.toggle("wom-hidden", tab !== this.activeTab);
@@ -645,25 +682,18 @@ export class Overlay {
     this.hotkeyList.replaceChildren();
     this.hotkeyCells.clear();
 
-    const labels: Record<HotkeyAction, string> = {
-      toggleUI: "Toggle UI",
-      start: "Start",
-      pause: "Pause",
-      stop: "Stop",
-      emergency: "Emergency stop",
-    };
-
-    for (const action of Object.keys(labels) as HotkeyAction[]) {
+    for (const action of Object.keys(HOTKEY_LABELS) as HotkeyAction[]) {
       const key = el("button", {
         className: "wom-hotkey-key",
-        text: settings.input.hotkeys[action],
+        text: humanizeCode(settings.input.hotkeys[action]),
         type: "button",
         dataset: { listening: "0" },
+        attrs: { title: `${HOTKEY_LABELS[action]} — click to rebind` },
       });
       this.disposers.push(listen(key, "click", () => this.beginListen({ kind: "hotkey", index: action as any }, key)));
       this.hotkeyCells.set(action, key);
       this.hotkeyList.appendChild(
-        el("div", { className: "wom-hotkey" }, [el("span", { className: "wom-hotkey-name", text: labels[action] }), key]),
+        el("div", { className: "wom-hotkey" }, [el("span", { className: "wom-hotkey-name", text: HOTKEY_LABELS[action] }), key]),
       );
     }
   }
@@ -674,7 +704,10 @@ export class Overlay {
     // Cancel any previous capture first.
     this.cancelListen();
     this.listeningFor = target;
+    this.listeningCell = cell;
+    this.listenOriginalText = cell.textContent ?? "";
     cell.dataset.listening = "1";
+    setText(cell, "press a key…");
 
     const onKey = (event: KeyboardEvent) => {
       event.preventDefault();
@@ -699,8 +732,22 @@ export class Overlay {
         this.host.onRebindMapping();
       } else {
         const action = target.index as unknown as HotkeyAction;
+        const taken = (
+          Object.entries(this.settingsManager.all.input.hotkeys) as Array<[HotkeyAction, string]>
+        ).find(([other, code]) => code === event.code && other !== action);
+        if (taken) {
+          // Stay in capture mode so the user can simply press another key.
+          this.setNotice(
+            "warn",
+            `${humanizeCode(event.code)} is already bound to ${HOTKEY_LABELS[taken[0]]}. Press another key, or Esc to cancel.`,
+          );
+          return;
+        }
         this.settingsManager.set(`input.hotkeys.${action}`, event.code);
       }
+      // The settings subscription repaints the chip/grid; do not restore the
+      // "press a key…" placeholder over the fresh value.
+      this.listenOriginalText = null;
       this.cancelListen();
     };
 
@@ -720,7 +767,18 @@ export class Overlay {
       this.listenDisposer();
       this.listenDisposer = null;
     }
+    // Put the chip's label back unless a successful bind already repainted it.
+    if (this.listeningCell && this.listenOriginalText !== null) {
+      setText(this.listeningCell, this.listenOriginalText);
+    }
+    this.listeningCell = null;
+    this.listenOriginalText = null;
     this.listeningFor = null;
+  }
+
+  /** True while a rebind capture owns the keyboard (see HotkeyManager). */
+  get isCapturing(): boolean {
+    return this.listeningFor !== null;
   }
 
   /* ------------------------------ drag/resize ----------------------------- */
@@ -969,7 +1027,7 @@ export class Overlay {
       }
       this.renderMappingGrid();
       for (const [action, cell] of this.hotkeyCells) {
-        setText(cell, settings.input.hotkeys[action]);
+        setText(cell, humanizeCode(settings.input.hotkeys[action]));
       }
       return;
     }

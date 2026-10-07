@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { DEFAULT_SETTINGS, OFFSET_MAX, OFFSET_MIN, STORAGE_KEY } from "../src/constants";
+import {
+  DEFAULT_SETTINGS,
+  EXTENDED_SUFFIX_CODES,
+  FALLBACK_KEYBINDS,
+  OFFSET_MAX,
+  OFFSET_MIN,
+  STORAGE_KEY,
+} from "../src/constants";
 import { findHotkeyCollisions, SettingsManager } from "../src/core/settings";
 import {
   clamp,
@@ -357,5 +364,34 @@ describe("helpers", () => {
     assert.deepEqual(deepMerge(base, null), base);
     assert.deepEqual(deepMerge(base, undefined), base);
     assert.deepEqual(deepMerge(base, "string"), base);
+  });
+});
+
+describe("default hotkeys", () => {
+  it("avoid every fallback and extended column layout", () => {
+    const columnCodes = new Set<string>();
+    for (const layouts of FALLBACK_KEYBINDS) {
+      for (const layout of layouts) {
+        for (const code of layout) if (code) columnCodes.add(code);
+      }
+    }
+    for (const code of EXTENDED_SUFFIX_CODES) columnCodes.add(code);
+    for (const [action, code] of Object.entries(DEFAULT_SETTINGS.input.hotkeys)) {
+      assert.ok(
+        !columnCodes.has(code),
+        `${action} default ${code} collides with a column layout`,
+      );
+    }
+  });
+
+  it("are letter keys, not function keys", () => {
+    for (const code of Object.values(DEFAULT_SETTINGS.input.hotkeys)) {
+      assert.match(code, /^Key[A-Z]$/, `${code} is not a letter key`);
+    }
+  });
+
+  it("are pairwise distinct", () => {
+    const codes = Object.values(DEFAULT_SETTINGS.input.hotkeys);
+    assert.equal(new Set(codes).size, codes.length);
   });
 });

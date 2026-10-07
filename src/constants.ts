@@ -112,11 +112,16 @@ export const DEFAULT_SETTINGS: Settings = {
     keyMappings: {},
     useSecondaryKeybind: false,
     hotkeys: {
-      toggleUI: "F6",
-      start: "F7",
-      pause: "F8",
-      stop: "F9",
-      emergency: "F10",
+      // Letter keys, deliberately chosen from the letters that appear in NO
+      // column layout: FALLBACK_KEYBINDS covers A S D F V N J K L (plus Space
+      // and Semicolon) and EXTENDED_SUFFIX_CODES covers Q W E R T Y U I O P,
+      // so a default hotkey can never double as a column key at any key count.
+      // Mnemonics: H = hide/show, G = go, B = break, X = stop, Z = last resort.
+      toggleUI: "KeyH",
+      start: "KeyG",
+      pause: "KeyB",
+      stop: "KeyX",
+      emergency: "KeyZ",
     },
   },
   appearance: {

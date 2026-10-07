@@ -8,7 +8,7 @@ import { listen } from "./ui/dom";
  *
  *  1. Only *trusted* events count. Our own synthetic keypresses are dispatched
  *     on `document` with `bubbles: true`, so without this check an autoplay
- *     note on a column bound to (say) F7 would trigger the "start" hotkey.
+ *     note on a column bound to (say) KeyG would trigger the "start" hotkey.
  *     `event.isTrusted` is the clean discriminator: real user input is trusted,
  *     script-generated input is not.
  *
@@ -25,6 +25,12 @@ export interface HotkeyHooks {
   /** All keybind codes the site currently uses, for collision warnings. */
   getSiteCodes: () => string[];
   onCollision?: (collisions: Array<{ action: HotkeyAction; code: string }>) => void;
+  /**
+   * True while the overlay is capturing a keystroke for rebinding. The binding
+   * keystroke must never fire the action it is about to replace (pressing the
+   * old key of another action during a capture would trigger it).
+   */
+  isCapturing?: () => boolean;
 }
 
 export class HotkeyManager {
@@ -61,6 +67,10 @@ export class HotkeyManager {
   private onKeyDown(event: KeyboardEvent): void {
     // Ignore our own synthetic events and key repeats.
     if (!event.isTrusted || event.repeat) return;
+
+    // While the overlay is capturing a keystroke for rebinding, that keystroke
+    // belongs to the capture, not to the action table.
+    if (this.hooks.isCapturing?.()) return;
 
     const action = this.codes.get(event.code);
     if (!action) return;

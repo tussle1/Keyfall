@@ -206,7 +206,7 @@ function structuredCloneSafe<T>(value: T): T {
  *
  * Our hotkeys are handled on `keydown` with `preventDefault`, but the site's
  * `InputSystem` also listens on `document` and would still see the event. If a
- * user binds F7 to a column, pressing our "start" hotkey would also register a
+ * user binds KeyG to a column, pressing our "start" hotkey would also register a
  * note hit. We warn instead of silently misbehaving.
  */
 export function findHotkeyCollisions(
