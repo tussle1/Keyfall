@@ -1,0 +1,20 @@
+# GitHub Linguist overrides — controls what the repository's Languages panel
+# counts. See https://github.com/github-linguist/linguist#using-gitattributes
+#
+# Linguist analyses the default branch on every push. These rules make that
+# analysis stable and honest rather than leaving it to heuristics.
+
+# Build output and the lockfile are generated. Neither is committed today, but
+# excluding them means a future commit of dist/ cannot skew the panel toward
+# "minified JavaScript".
+dist/**           linguist-generated
+package-lock.json linguist-generated
+
+# The sandbox page is HTML carrying a large inline <script> and <style> block.
+# Pin its classification so content heuristics cannot tip it toward JavaScript
+# and erase the markup from the panel.
+demo/index.html   linguist-language=HTML
+
+# Tests, demo harness and build scripts are real source and are counted on
+# purpose. They are TypeScript and JavaScript respectively, so they change the
+# proportions in the panel but never which languages appear.
