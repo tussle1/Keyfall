@@ -9,6 +9,7 @@
 # "minified JavaScript".
 dist/**           linguist-generated
 package-lock.json linguist-generated
+release/**        linguist-generated
 
 # The sandbox page is HTML carrying a large inline <script> and <style> block.
 # Pin its classification so content heuristics cannot tip it toward JavaScript

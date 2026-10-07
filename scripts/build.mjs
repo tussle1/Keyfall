@@ -24,8 +24,10 @@ const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
 
 const USERSCRIPT_HEADER = `// ==UserScript==
 // @name         Keyfall
-// @namespace    https://github.com/tussle1/BedForge
+// @namespace    https://github.com/tussle1/Keyfall
 // @version      ${pkg.version}
+// @updateURL    https://raw.githubusercontent.com/tussle1/Keyfall/main/release/keyfall.user.js
+// @downloadURL  https://raw.githubusercontent.com/tussle1/Keyfall/main/release/keyfall.user.js
 // @description  Keyfall — detects the live Web osu!mania chart and plays it through the site's own keyboard input path. Optional reproducible timing humanization. Local, single-player automation only.
 // @author       tussle1
 // @match        https://webosumania.com/*
@@ -71,6 +73,14 @@ const code = minified.outputFiles[0].text;
 // Wrap in an IIFE so the bundle's top-level scope can't collide with the page.
 const userscript = `${USERSCRIPT_HEADER}\n(() => {\n"use strict";\n${code}\n})();\n`;
 await writeFile(resolve(root, "dist/keyfall.user.js"), userscript, "utf8");
+
+// --- committed install artifact -----------------------------------------
+// dist/ is gitignored, but a userscript needs a stable public URL to install
+// and update from. release/keyfall.user.js is that artifact: raw.githubusercontent.com
+// serves it straight from the branch, and the header's @updateURL/@downloadURL
+// point at it. Refreshing it is part of the build so the two cannot drift.
+await mkdir(resolve(root, "release"), { recursive: true });
+await writeFile(resolve(root, "release/keyfall.user.js"), userscript, "utf8");
 
 // --- plain script -------------------------------------------------------
 await writeFile(resolve(root, "dist/keyfall.js"), code, "utf8");

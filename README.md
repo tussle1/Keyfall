@@ -302,10 +302,24 @@ with source references, are in [`docs/SITE-CONTRACT.md`](docs/SITE-CONTRACT.md).
 
 ### Get it
 
-`dist/` is a build output and is gitignored, so build first:
+**One-click (recommended).** With Tampermonkey or Violentmonkey enabled, open
+this URL in a browser tab:
+
+```
+https://raw.githubusercontent.com/tussle1/Keyfall/main/release/keyfall.user.js
+```
+
+Your userscript manager intercepts the `.user.js` and shows its install page —
+click **Install**. `release/keyfall.user.js` is a committed build artifact that
+exists precisely so this URL is stable, and the header's `@updateURL` /
+`@downloadURL` point at the same file, so the manager can offer updates when a
+new build is published. (It is marked `linguist-generated`, so it does not skew
+the repository's language statistics.)
+
+**From source.** `dist/` is a build output and is gitignored, so build first:
 
 ```bash
-git clone https://github.com/tussle1/BedForge.git keyfall
+git clone https://github.com/tussle1/Keyfall.git keyfall
 cd keyfall
 npm install
 npm run build
@@ -324,9 +338,9 @@ Node 20+ is needed to build. The bundle itself has **zero runtime dependencies**
 
 ### Load it
 
-**Userscript.** Open `dist/keyfall.user.js` and accept the install prompt, or drag
-it onto your userscript manager's dashboard. Then load `webosumania.com` — the
-overlay appears in the top-left.
+**Userscript.** Install from the raw URL above, or open `dist/keyfall.user.js`
+and accept the install prompt, or drag it onto your userscript manager's
+dashboard. Then load `webosumania.com` — the overlay appears in the top-left.
 
 **Plain script.** Load `dist/keyfall.js` however you like. It exposes
 `window.Keyfall`.
