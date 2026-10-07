@@ -1,6 +1,5 @@
 import {
   DEFAULT_SETTINGS,
-  LEGACY_DEFAULT_HOTKEYS,
   LOOKAHEAD_MAX,
   LOOKAHEAD_MIN,
   MAX_KEY_COUNT,
@@ -26,12 +25,20 @@ export interface SettingsEvents {
 }
 
 /**
- * One-time hotkey migration. Stores written before v1.1.0 carry the F-key
- * defaults; a store whose hotkey set still matches LEGACY_DEFAULT_HOTKEYS
- * exactly was never customised, so it is swapped for the current letter
- * defaults. Anything else — including a partial edit of the old defaults —
- * is a deliberate choice and is left alone.
+ * Hotkey migration, per action. Each action carries a short history of shipped
+ * defaults (the original F-keys, plus the interim letter set for the UI
+ * toggle). A stored code matching an older shipped default for that action was
+ * never customised, so it follows the current default forward; any other
+ * stored code is a deliberate choice and is left exactly as saved.
  */
+const LEGACY_HOTKEYS: Record<HotkeyAction, readonly string[]> = {
+  toggleUI: ["F6", "KeyH"],
+  start: ["F7"],
+  pause: ["F8"],
+  stop: ["F9"],
+  emergency: ["F10"],
+};
+
 function migrateLegacyHotkeys(parsed: unknown): void {
   if (!parsed || typeof parsed !== "object") return;
   const input = (parsed as { input?: unknown }).input;
@@ -39,13 +46,13 @@ function migrateLegacyHotkeys(parsed: unknown): void {
   const stored = (input as { hotkeys?: unknown }).hotkeys;
   if (!stored || typeof stored !== "object") return;
 
-  const legacy = LEGACY_DEFAULT_HOTKEYS as unknown as Record<string, string>;
-  const current = stored as Record<string, unknown>;
-  const keys = Object.keys(legacy);
-  const untouched =
-    Object.keys(current).length === keys.length && keys.every((k) => current[k] === legacy[k]);
-  if (untouched) {
-    (input as { hotkeys: unknown }).hotkeys = { ...DEFAULT_SETTINGS.input.hotkeys };
+  const hotkeys = stored as Record<string, unknown>;
+  for (const [action, history] of Object.entries(LEGACY_HOTKEYS) as Array<
+    [HotkeyAction, readonly string[]]
+  >) {
+    if (history.includes(hotkeys[action] as string)) {
+      hotkeys[action] = DEFAULT_SETTINGS.input.hotkeys[action];
+    }
   }
 }
 

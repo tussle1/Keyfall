@@ -11,7 +11,7 @@ keyboard input path — with optional reproducible timing humanization.
 
 [![Status](https://img.shields.io/badge/status-active-success)](#disclaimer)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.1.0-ff6b9d)](#installation)
+[![Version](https://img.shields.io/badge/version-1.1.1-ff6b9d)](#installation)
 [![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=000)](#development)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=fff)](#development)
 [![HTML5](https://img.shields.io/badge/HTML5-E34F26?logo=html5&logoColor=fff)](#try-it-without-the-site)
@@ -495,10 +495,9 @@ column key. All five are reconfigurable in Settings → Input, which opens
 straight onto the Hotkeys section: click a key chip, press the new key (the
 chip glows and reads "press a key…" while listening), `Esc` cancels, and
 **Reset hotkeys to defaults** puts Right Shift / G / B / X / Z back. Binding a
-key that another Keyfall action already uses is refused with a notice. Installs
-that still carry the original F-key defaults, never customised, are migrated to
-the new defaults on load; a store with even one edited hotkey is treated as
-deliberate and untouched. The manager only acts on trusted
+key that another Keyfall action already uses is refused with a notice. Migration is per key: a stored code that matches an earlier shipped default
+(the F-keys, or the interim H toggle) follows the current default forward, while
+any other stored code is treated as your choice and left alone. The manager only acts on trusted
 events, in the capture phase, and ignores `repeat` and any ctrl/meta/alt
 combination — so a hotkey never also registers as a column hit. If you bind a
 hotkey to a code the site uses as a column keybind, you get a warning.

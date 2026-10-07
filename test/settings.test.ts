@@ -405,32 +405,36 @@ describe("legacy hotkey migration", () => {
     env.window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ input: { hotkeys } }));
   };
 
-  it("migrates an untouched F-key store to the letter defaults", () => {
+  it("migrates an untouched F-key store to the current defaults", () => {
     store({ toggleUI: "F6", start: "F7", pause: "F8", stop: "F9", emergency: "F10" });
     const settings = new SettingsManager(undefined, env.window);
     assert.deepEqual(settings.all.input.hotkeys, DEFAULT_SETTINGS.input.hotkeys);
     settings.dispose();
   });
 
-  it("keeps a store where even one hotkey was customised", () => {
-    store({ toggleUI: "F6", start: "F7", pause: "F8", stop: "F9", emergency: "KeyZ" });
+  it("migrates an interim letter store's toggle to Right Shift", () => {
+    store({ toggleUI: "KeyH", start: "KeyG", pause: "KeyB", stop: "KeyX", emergency: "KeyZ" });
     const settings = new SettingsManager(undefined, env.window);
-    assert.equal(settings.all.input.hotkeys.toggleUI, "F6");
-    assert.equal(settings.all.input.hotkeys.emergency, "KeyZ");
+    assert.equal(settings.all.input.hotkeys.toggleUI, "ShiftRight");
+    assert.equal(settings.all.input.hotkeys.start, "KeyG");
     settings.dispose();
   });
 
-  it("skips migration when the stored set has extra keys", () => {
-    store({
-      toggleUI: "F6",
-      start: "F7",
-      pause: "F8",
-      stop: "F9",
-      emergency: "F10",
-      future: "KeyM",
-    });
+  it("migrates per action and keeps deliberate choices", () => {
+    store({ toggleUI: "F6", start: "F7", pause: "F8", stop: "F9", emergency: "KeyM" });
     const settings = new SettingsManager(undefined, env.window);
-    assert.equal(settings.all.input.hotkeys.toggleUI, "F6");
+    assert.equal(
+      settings.all.input.hotkeys.toggleUI,
+      DEFAULT_SETTINGS.input.hotkeys.toggleUI,
+    );
+    assert.equal(settings.all.input.hotkeys.emergency, "KeyM");
+    settings.dispose();
+  });
+
+  it("keeps a customised toggle as stored", () => {
+    store({ toggleUI: "KeyM", start: "KeyG", pause: "KeyB", stop: "KeyX", emergency: "KeyZ" });
+    const settings = new SettingsManager(undefined, env.window);
+    assert.equal(settings.all.input.hotkeys.toggleUI, "KeyM");
     settings.dispose();
   });
 });

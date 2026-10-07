@@ -2,7 +2,7 @@ import { DEFAULT_HUMANIZATION } from "./humanize/humanizer";
 import type { Settings } from "./types";
 
 export const NAME = "Keyfall";
-export const VERSION = "1.1.0";
+export const VERSION = "1.1.1";
 
 /** localStorage key for persisted settings. Versioned so we can migrate. */
 export const STORAGE_KEY = "keyfall:settings:v1";
@@ -138,19 +138,6 @@ export const DEFAULT_SETTINGS: Settings = {
   humanization: { ...DEFAULT_HUMANIZATION },
 };
 
-/**
- * The original F-key hotkey defaults. Installs that ran before the letter-key
- * defaults persisted these into localStorage. A stored hotkey set that still
- * matches this exactly has never been customised, so load() migrates it to the
- * current defaults; any other stored set is a deliberate choice and is kept.
- */
-export const LEGACY_DEFAULT_HOTKEYS: Settings["input"]["hotkeys"] = {
-  toggleUI: "F6",
-  start: "F7",
-  pause: "F8",
-  stop: "F9",
-  emergency: "F10",
-};
 
 /** Timing offset slider bounds, per spec. */
 export const OFFSET_MIN = -200;
