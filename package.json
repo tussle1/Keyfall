@@ -1,0 +1,24 @@
+{
+  "name": "web-osu-mania-autoplay",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser-side autoplay automation for Web osu!mania (webosumania.com). Detects the live chart and drives the site's own keyboard input path.",
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "test": "node --import=./test/helpers/register.mjs --test test/*.test.ts",
+    "smoke": "npm run build && node --import=./test/helpers/register.mjs scripts/smoke.mjs",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run typecheck && npm run test && npm run smoke",
+    "demo": "node scripts/demo-server.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

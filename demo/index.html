@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Autoplay Sandbox — Web osu!mania tool demo</title>
+    <style>
+      :root {
+        --bg: #0b0c10;
+        --panel: rgba(255, 255, 255, 0.045);
+        --border: rgba(255, 255, 255, 0.09);
+        --text: #e8e9ef;
+        --muted: #9a9cab;
+        --dim: #6b6d7b;
+        --accent: #ff6b9d;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; height: 100%; background: var(--bg); color: var(--text);
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        overflow: hidden;
+      }
+      #stage { position: fixed; inset: 0; }
+      #stage canvas { display: block; width: 100%; height: 100%; }
+
+      #bar {
+        position: fixed; left: 0; right: 0; bottom: 0;
+        display: flex; align-items: center; gap: 10px;
+        padding: 10px 14px;
+        background: rgba(11, 12, 16, 0.9);
+        backdrop-filter: blur(12px);
+        border-top: 1px solid var(--border);
+        z-index: 10;
+        flex-wrap: wrap;
+      }
+      #bar .spacer { flex: 1 1 auto; }
+      select, button {
+        background: var(--panel); color: var(--text);
+        border: 1px solid var(--border); border-radius: 8px;
+        padding: 7px 12px; font-size: 12px; font-family: inherit;
+        cursor: pointer;
+      }
+      button:hover { border-color: rgba(255,255,255,0.2); background: rgba(255,255,255,0.08); }
+      button.primary { border-color: color-mix(in srgb, var(--accent) 50%, transparent); font-weight: 650; }
+      button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+      #banner {
+        position: fixed; top: 0; left: 0; right: 0;
+        padding: 9px 14px; z-index: 10;
+        background: linear-gradient(180deg, rgba(11,12,16,0.95), rgba(11,12,16,0.72));
+        border-bottom: 1px solid var(--border);
+        font-size: 11.5px; color: var(--muted);
+        display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+      }
+      #banner b { color: var(--text); font-weight: 650; }
+      #banner code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px; color: var(--accent);
+        background: rgba(255,107,157,0.1); padding: 1px 5px; border-radius: 4px;
+      }
+      #banner .tag {
+        border: 1px solid var(--border); border-radius: 999px;
+        padding: 2px 9px; font-size: 10px; letter-spacing: .04em;
+        text-transform: uppercase; color: var(--dim);
+      }
+
+      #results {
+        position: fixed; inset: 0; display: none;
+        place-items: center; z-index: 20;
+        background: rgba(6,7,10,0.78); backdrop-filter: blur(6px);
+      }
+      #results.show { display: grid; }
+      #results .card {
+        background: #12131a; border: 1px solid var(--border);
+        border-radius: 14px; padding: 22px 26px; min-width: 300px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      }
+      #results h2 { margin: 0 0 14px; font-size: 15px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+      #results .row { display: flex; justify-content: space-between; gap: 20px; padding: 4px 0; font-size: 13px; }
+      #results .row span:first-child { color: var(--dim); }
+      #results .row span:last-child { font-variant-numeric: tabular-nums; font-weight: 600; }
+      #results .grade { font-size: 40px; font-weight: 800; text-align: center; margin: 6px 0 14px; color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <div id="banner">
+      <span class="tag">Sandbox</span>
+      <span>
+        This is <b>not</b> webosumania.com — it is a stub implementing the documented contract so the
+        <b>real, unmodified autoplay bundle</b> can be exercised here.
+      </span>
+      <span>Console: <code>WebOsuManiaAutoplay.diagnostics()</code></span>
+    </div>
+
+    <div id="stage"><canvas id="game"></canvas></div>
+
+    <div id="bar">
+      <select id="chart"></select>
+      <button id="play" class="primary">Play</button>
+      <button id="pause" disabled>Pause</button>
+      <button id="quit" disabled>Quit</button>
+      <div class="spacer"></div>
+      <span id="hint" style="font-size:11px;color:var(--dim)"></span>
+    </div>
+
+    <div id="results">
+      <div class="card">
+        <h2>Results</h2>
+        <div class="grade" id="grade">—</div>
+        <div class="row"><span>Score</span><span id="r-score">0</span></div>
+        <div class="row"><span>Accuracy</span><span id="r-acc">0%</span></div>
+        <div class="row"><span>Max combo</span><span id="r-combo">0</span></div>
+        <div class="row"><span>320 / 300 / 200</span><span id="r-hits">0 / 0 / 0</span></div>
+        <div class="row"><span>Miss</span><span id="r-miss">0</span></div>
+        <div style="margin-top:16px;text-align:center">
+          <button id="close-results">Back</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="./stub-game.js"></script>
+    <script src="/autoplay.js"></script>
+    <script>
+      (function () {
+        const canvas = document.getElementById("game");
+        const ctx = canvas.getContext("2d");
+        const chartSelect = document.getElementById("chart");
+        const playBtn = document.getElementById("play");
+        const pauseBtn = document.getElementById("pause");
+        const quitBtn = document.getElementById("quit");
+        const hint = document.getElementById("hint");
+        const results = document.getElementById("results");
+
+        let game = null;
+        let rafId = null;
+
+        function resize() {
+          const dpr = window.devicePixelRatio || 1;
+          canvas.width = Math.floor(window.innerWidth * dpr);
+          canvas.height = Math.floor(window.innerHeight * dpr);
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+        window.addEventListener("resize", resize);
+        resize();
+
+        for (const name of window.STUB_CHARTS) {
+          const option = document.createElement("option");
+          option.value = name;
+          option.textContent = name;
+          chartSelect.appendChild(option);
+        }
+
+        function updateHint() {
+          const name = chartSelect.value;
+          const keyCount = name.startsWith("4K") ? 4 : name.startsWith("7K") ? 7 : 10;
+          const codes = window.STUB_KEYBINDS[keyCount] || [];
+          hint.textContent = "Keys: " + codes.map((c) => c.replace("Key", "").replace("Semicolon", ";")).join("  ");
+        }
+        chartSelect.addEventListener("change", updateHint);
+        updateHint();
+
+        function draw() {
+          window.stubRender(ctx, game, window.innerWidth, window.innerHeight);
+          rafId = requestAnimationFrame(draw);
+        }
+        draw();
+
+        function showResults(summary) {
+          document.getElementById("grade").textContent = grade(summary.accuracy);
+          document.getElementById("r-score").textContent = summary.score.toLocaleString();
+          document.getElementById("r-acc").textContent = (summary.accuracy * 100).toFixed(2) + "%";
+          document.getElementById("r-combo").textContent = summary.maxCombo + "x";
+          document.getElementById("r-hits").textContent =
+            summary.counts[320] + " / " + summary.counts[300] + " / " + summary.counts[200];
+          document.getElementById("r-miss").textContent = summary.counts.miss;
+          results.classList.add("show");
+        }
+
+        function grade(accuracy) {
+          if (accuracy >= 1) return "SS";
+          if (accuracy >= 0.95) return "S";
+          if (accuracy >= 0.9) return "A";
+          if (accuracy >= 0.8) return "B";
+          if (accuracy >= 0.7) return "C";
+          return "D";
+        }
+
+        function setButtons(playing) {
+          playBtn.disabled = playing;
+          pauseBtn.disabled = !playing;
+          quitBtn.disabled = !playing;
+          chartSelect.disabled = playing;
+        }
+
+        playBtn.addEventListener("click", () => {
+          if (game) game.dispose();
+          game = new window.StubGame(chartSelect.value);
+          game.mount(canvas);
+          game.onResults = (summary) => {
+            setButtons(false);
+            showResults(summary);
+          };
+          game.start();
+          setButtons(true);
+          pauseBtn.textContent = "Pause";
+        });
+
+        pauseBtn.addEventListener("click", () => {
+          if (!game) return;
+          if (game.state === "PLAY") {
+            game.pause();
+            pauseBtn.textContent = "Resume";
+          } else if (game.state === "PAUSE") {
+            game.resume();
+            pauseBtn.textContent = "Pause";
+          }
+        });
+
+        quitBtn.addEventListener("click", () => {
+          if (!game) return;
+          game.dispose();
+          game = null;
+          setButtons(false);
+          pauseBtn.textContent = "Pause";
+        });
+
+        document.getElementById("close-results").addEventListener("click", () => {
+          results.classList.remove("show");
+          if (game) { game.dispose(); game = null; }
+        });
+
+        // Escape quits, matching the site's pause binding.
+        document.addEventListener("keydown", (event) => {
+          if (event.code !== "Escape" || !game) return;
+          if (game.state === "PLAY" || game.state === "PAUSE") {
+            game.dispose();
+            game = null;
+            setButtons(false);
+          }
+        });
+
+        window.demoStub = {
+          get game() { return game; },
+          charts: window.STUB_CHARTS,
+        };
+      })();
+    </script>
+  </body>
+</html>
