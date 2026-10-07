@@ -384,14 +384,53 @@ describe("default hotkeys", () => {
     }
   });
 
-  it("are letter keys, not function keys", () => {
-    for (const code of Object.values(DEFAULT_SETTINGS.input.hotkeys)) {
-      assert.match(code, /^Key[A-Z]$/, `${code} is not a letter key`);
+  it("are letter keys, except the UI toggle on Right Shift", () => {
+    for (const [action, code] of Object.entries(DEFAULT_SETTINGS.input.hotkeys)) {
+      if (action === "toggleUI") {
+        assert.equal(code, "ShiftRight");
+      } else {
+        assert.match(code, /^Key[A-Z]$/, `${code} is not a letter key`);
+      }
     }
   });
 
   it("are pairwise distinct", () => {
     const codes = Object.values(DEFAULT_SETTINGS.input.hotkeys);
     assert.equal(new Set(codes).size, codes.length);
+  });
+});
+
+describe("legacy hotkey migration", () => {
+  const store = (hotkeys: Record<string, string>) => {
+    env.window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ input: { hotkeys } }));
+  };
+
+  it("migrates an untouched F-key store to the letter defaults", () => {
+    store({ toggleUI: "F6", start: "F7", pause: "F8", stop: "F9", emergency: "F10" });
+    const settings = new SettingsManager(undefined, env.window);
+    assert.deepEqual(settings.all.input.hotkeys, DEFAULT_SETTINGS.input.hotkeys);
+    settings.dispose();
+  });
+
+  it("keeps a store where even one hotkey was customised", () => {
+    store({ toggleUI: "F6", start: "F7", pause: "F8", stop: "F9", emergency: "KeyZ" });
+    const settings = new SettingsManager(undefined, env.window);
+    assert.equal(settings.all.input.hotkeys.toggleUI, "F6");
+    assert.equal(settings.all.input.hotkeys.emergency, "KeyZ");
+    settings.dispose();
+  });
+
+  it("skips migration when the stored set has extra keys", () => {
+    store({
+      toggleUI: "F6",
+      start: "F7",
+      pause: "F8",
+      stop: "F9",
+      emergency: "F10",
+      future: "KeyM",
+    });
+    const settings = new SettingsManager(undefined, env.window);
+    assert.equal(settings.all.input.hotkeys.toggleUI, "F6");
+    settings.dispose();
   });
 });

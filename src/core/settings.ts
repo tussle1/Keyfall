@@ -1,5 +1,6 @@
 import {
   DEFAULT_SETTINGS,
+  LEGACY_DEFAULT_HOTKEYS,
   LOOKAHEAD_MAX,
   LOOKAHEAD_MIN,
   MAX_KEY_COUNT,
@@ -22,6 +23,30 @@ import { Emitter } from "../util/emitter";
 
 export interface SettingsEvents {
   change: { settings: Settings; path: string };
+}
+
+/**
+ * One-time hotkey migration. Stores written before v1.1.0 carry the F-key
+ * defaults; a store whose hotkey set still matches LEGACY_DEFAULT_HOTKEYS
+ * exactly was never customised, so it is swapped for the current letter
+ * defaults. Anything else — including a partial edit of the old defaults —
+ * is a deliberate choice and is left alone.
+ */
+function migrateLegacyHotkeys(parsed: unknown): void {
+  if (!parsed || typeof parsed !== "object") return;
+  const input = (parsed as { input?: unknown }).input;
+  if (!input || typeof input !== "object") return;
+  const stored = (input as { hotkeys?: unknown }).hotkeys;
+  if (!stored || typeof stored !== "object") return;
+
+  const legacy = LEGACY_DEFAULT_HOTKEYS as unknown as Record<string, string>;
+  const current = stored as Record<string, unknown>;
+  const keys = Object.keys(legacy);
+  const untouched =
+    Object.keys(current).length === keys.length && keys.every((k) => current[k] === legacy[k]);
+  if (untouched) {
+    (input as { hotkeys: unknown }).hotkeys = { ...DEFAULT_SETTINGS.input.hotkeys };
+  }
 }
 
 export class SettingsManager {
@@ -58,6 +83,7 @@ export class SettingsManager {
 
     try {
       const parsed = JSON.parse(raw);
+      migrateLegacyHotkeys(parsed);
       return this.sanitize(deepMerge(base, parsed));
     } catch (err) {
       console.warn("[Autoplay] stored settings were unreadable, using defaults", err);

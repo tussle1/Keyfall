@@ -11,7 +11,7 @@ keyboard input path — with optional reproducible timing humanization.
 
 [![Status](https://img.shields.io/badge/status-active-success)](#disclaimer)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-ff6b9d)](#installation)
+[![Version](https://img.shields.io/badge/version-1.1.0-ff6b9d)](#installation)
 [![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=000)](#development)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=fff)](#development)
 [![HTML5](https://img.shields.io/badge/HTML5-E34F26?logo=html5&logoColor=fff)](#try-it-without-the-site)
@@ -369,8 +369,8 @@ no size limit and survives navigation.
    strength, and watch the statistics readout.
 7. **Start.** Press `G` or click START.
 8. **Monitor.** Status, notes remaining, accuracy, combo and score update live.
-   The keyboard visualisation lights as columns are pressed. Press `H` twice to
-   collapse to the mini bar if it is in the way.
+   The keyboard visualisation lights as columns are pressed. Press `Right Shift`
+   twice to hide the panel if it is in the way.
 9. **Stop or restart.** `X` stops and releases everything. `B` pauses and
    resumes. `Z` is the emergency stop — total reset, every key released,
    detection re-armed. Changing beatmap needs no action: the new chart is picked
@@ -439,7 +439,7 @@ See the [humanization table](#configuration-1). Off by default.
 |---|---|---|
 | Key mapping | Per-key-count overrides; click a column, then press a key | Read from the site |
 | Use secondary keybind | Press both of a column's bindings when the site has two | Off |
-| Hotkeys | Reconfigurable; warns on collision with a site keybind | H G B X Z |
+| Hotkeys | Reconfigurable; warns on collision with a site keybind | Right Shift, G B X Z |
 
 ### Appearance
 
@@ -482,18 +482,23 @@ both, which matters if your own setup expects it.
 
 | Key | Action |
 |---|---|
-| `H` | Toggle UI (panel ⇄ mini bar ⇄ hidden) |
+| `Right Shift` | Toggle UI (panel ⇄ mini bar ⇄ hidden) |
 | `G` | Start |
 | `B` | Pause / resume |
 | `X` | Stop |
 | `Z` | **Emergency stop** — releases every key immediately, full reset |
 
-The defaults are letters chosen from the set that appears in *no* column layout
-at any key count, so a hotkey can never double as a column key. All five are
-reconfigurable in Settings → Input: click a key chip, press the new key (the
+The UI toggle defaults to `Right Shift` — a modifier the site never binds to a
+column — and the four action keys are letters chosen from the set that appears
+in *no* column layout at any key count, so a hotkey can never double as a
+column key. All five are reconfigurable in Settings → Input, which opens
+straight onto the Hotkeys section: click a key chip, press the new key (the
 chip glows and reads "press a key…" while listening), `Esc` cancels, and
-**Reset hotkeys to defaults** puts H G B X Z back. Binding a key that another
-Keyfall action already uses is refused with a notice. The manager only acts on trusted
+**Reset hotkeys to defaults** puts Right Shift / G / B / X / Z back. Binding a
+key that another Keyfall action already uses is refused with a notice. Installs
+that still carry the original F-key defaults, never customised, are migrated to
+the new defaults on load; a store with even one edited hotkey is treated as
+deliberate and untouched. The manager only acts on trusted
 events, in the capture phase, and ignores `repeat` and any ctrl/meta/alt
 combination — so a hotkey never also registers as a column hit. If you bind a
 hotkey to a code the site uses as a column keybind, you get a warning.

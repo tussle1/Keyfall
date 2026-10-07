@@ -2,7 +2,7 @@ import { DEFAULT_HUMANIZATION } from "./humanize/humanizer";
 import type { Settings } from "./types";
 
 export const NAME = "Keyfall";
-export const VERSION = "1.0.0";
+export const VERSION = "1.1.0";
 
 /** localStorage key for persisted settings. Versioned so we can migrate. */
 export const STORAGE_KEY = "keyfall:settings:v1";
@@ -112,12 +112,15 @@ export const DEFAULT_SETTINGS: Settings = {
     keyMappings: {},
     useSecondaryKeybind: false,
     hotkeys: {
-      // Letter keys, deliberately chosen from the letters that appear in NO
-      // column layout: FALLBACK_KEYBINDS covers A S D F V N J K L (plus Space
-      // and Semicolon) and EXTENDED_SUFFIX_CODES covers Q W E R T Y U I O P,
-      // so a default hotkey can never double as a column key at any key count.
-      // Mnemonics: H = hide/show, G = go, B = break, X = stop, Z = last resort.
-      toggleUI: "KeyH",
+      // Right Shift toggles the panel: it is a modifier the site never uses as
+      // a column key, it is reachable without looking, and it cannot be hit by
+      // accident while typing or playing. The action keys are letters chosen
+      // from the set that appears in NO column layout: FALLBACK_KEYBINDS
+      // covers A S D F V N J K L (plus Space and Semicolon) and
+      // EXTENDED_SUFFIX_CODES covers Q W E R T Y U I O P, so a default hotkey
+      // can never double as a column key at any key count.
+      // Mnemonics: G = go, B = break, X = stop, Z = last resort.
+      toggleUI: "ShiftRight",
       start: "KeyG",
       pause: "KeyB",
       stop: "KeyX",
@@ -133,6 +136,20 @@ export const DEFAULT_SETTINGS: Settings = {
     size: { w: 296, h: 0 },
   },
   humanization: { ...DEFAULT_HUMANIZATION },
+};
+
+/**
+ * The original F-key hotkey defaults. Installs that ran before the letter-key
+ * defaults persisted these into localStorage. A stored hotkey set that still
+ * matches this exactly has never been customised, so load() migrates it to the
+ * current defaults; any other stored set is a deliberate choice and is kept.
+ */
+export const LEGACY_DEFAULT_HOTKEYS: Settings["input"]["hotkeys"] = {
+  toggleUI: "F6",
+  start: "F7",
+  pause: "F8",
+  stop: "F9",
+  emergency: "F10",
 };
 
 /** Timing offset slider bounds, per spec. */

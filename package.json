@@ -1,6 +1,6 @@
 {
   "name": "keyfall",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Keyfall \u2014 browser-side autoplay automation for Web osu!mania (webosumania.com). Detects the live chart and drives the site's own keyboard input path, with optional reproducible timing humanization.",

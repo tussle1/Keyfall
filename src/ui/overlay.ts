@@ -565,7 +565,9 @@ export class Overlay {
       );
       hotkeySection.appendChild(resetHotkeys);
 
-      panel.append(mapSection, secondary, hotkeySection);
+      // Hotkeys first: they are the setting people reach for most, and the
+      // key-mapping grid below is the one that needs the explanation.
+      panel.append(hotkeySection, mapSection, secondary);
       panel.classList.toggle("wom-hidden", tab !== this.activeTab);
       this.renderMappingGrid();
       this.renderHotkeyList();
