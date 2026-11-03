@@ -11,8 +11,8 @@ keyboard input path — with optional reproducible timing humanization. Never us
 either site's built-in Autoplay/Auto mod.
 
 [![Status](https://img.shields.io/badge/status-active-success)](#disclaimer)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.3.0-ff6b9d)](#installation)
+[![Code license: MIT](https://img.shields.io/badge/code_license-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-1.3.1-ff6b9d)](#installation)
 [![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=000)](#development)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=fff)](#development)
 [![HTML5](https://img.shields.io/badge/HTML5-E34F26?logo=html5&logoColor=fff)](#try-it-without-the-site)
@@ -165,7 +165,8 @@ See [Humanization in depth](#humanization-in-depth).
 - A compact trainer-style window, hidden on page load and opened/closed only
   by **Right Shift**. Its cover, slim sliders, switches, option buttons and
   geometric action buttons use smooth, decelerating motion; reduced-motion
-  preferences are respected.
+  preferences are respected. The UI prefers Torus when available and otherwise
+  uses the bundled rounded Comfortaa font.
 - Start / pause / resume, stop, and emergency-stop controls.
 - Notes remaining, accuracy, combo and score — read from the site's own score
   system, not recomputed and not scraped from the Pixi HUD.
@@ -373,7 +374,7 @@ to open the panel. On Ashtonk!mania, start a map in **Practice** mode.
 **Plain script.** Load `dist/keyfall.js` however you like. It exposes
 `window.Keyfall`.
 
-**Bookmarklet.** `dist/bookmarklet.txt` is about 270 KB, and most browsers
+**Bookmarklet.** `dist/bookmarklet.txt` is about 435 KB, and most browsers
 truncate bookmark URLs past roughly 64 KB — so it will not work as-is in most
 setups. Two options that do: host `dist/keyfall.js` somewhere you control and put
 that URL into `dist/bookmarklet-loader.txt`, or just use the userscript, which has
@@ -453,6 +454,17 @@ Keyfall.uiVisible;        // read-only; use Right Shift to open or close
 Keyfall.resetSettings();
 Keyfall.uninstall();
 ```
+
+## Font
+
+The panel prefers **Torus** if your browser can use a locally installed copy or
+if the page itself provides a `Torus` font. Torus is a commercial typeface and
+is not included in Keyfall; see [osu!'s font licence notice](https://github.com/ppy/osu-resources/blob/master/osu.Game.Resources/Fonts/Torus/LICENCE).
+If you have an appropriately licensed copy, install it on your device and reload
+the page. Otherwise the panel uses the bundled **Comfortaa** variable font, a
+rounded alternative covered by the [SIL Open Font License 1.1](assets/fonts/comfortaa/OFL.txt).
+The fallback is embedded in the userscript, so it does not make a font-network
+request. Keyfall's code remains under the MIT licence.
 
 ## Configuration
 
@@ -738,7 +750,7 @@ first.
 npm install
 npm run build      # → dist/keyfall.js, dist/keyfall.user.js, dist/bookmarklet*.txt
 npm run watch
-npm test           # 274 unit + integration tests
+npm test           # 275 unit + integration tests
 npm run smoke      # builds, then runs the SHIPPED BUNDLE against a stubbed site
 npm run verify     # typecheck + test + smoke
 npm run demo       # sandbox at http://localhost:5173/
@@ -824,7 +836,7 @@ exercised end to end without the live site.
 3. **Add a test.** If you changed timing or ordering behaviour, this is not
    optional. The two hardest bugs in this codebase were both invisible in manual
    testing and obvious under the stubbed clock.
-4. **Run `npm run verify`** — typecheck, 274 tests, and the bundle smoke test.
+4. **Run `npm run verify`** — typecheck, 275 tests, and the bundle smoke test.
 5. **Check by hand** against the real site, in this order: a 4K tap-only map, a
    map with holds (including one that ends exactly where the next note on that
    column starts), a dense stream, 7K or higher, pause and resume mid-hold, a
@@ -855,7 +867,7 @@ kilobyte and every global it touches is a cost.
     Multi-layer stuck-key prevention and safe-stop guarantees
     SPA survival: beatmap change, gameplay close, replay and results screens
     Multi-site Ashtonk!mania adapter, Practice-only fair-play gate
-    274 tests plus a 57-check shipped-bundle smoke test
+    275 tests plus a 60-check shipped-bundle smoke test
     Sandbox demo harness
 
 [ ] Planned

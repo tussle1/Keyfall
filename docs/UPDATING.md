@@ -201,7 +201,7 @@ in the adapter's `unsupportedReason`; do not add engine-level exceptions.
 ## Step 4: verify
 
 ```bash
-npm run verify     # typecheck + 274 tests + 57-check shipped-bundle smoke test
+npm run verify     # typecheck + 275 tests + 60-check shipped-bundle smoke test
 ```
 
 If you changed timing or ordering behaviour, add a test. The two bugs that were

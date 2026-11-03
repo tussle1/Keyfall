@@ -287,7 +287,7 @@ retrospectively, which made the counts depend on arrival order.
 
 ## Testing
 
-274 tests, `node --test`, no test framework dependency, plus a 57-check smoke test
+275 tests, `node --test`, no test framework dependency, plus a 60-check smoke test
 that runs the shipped bundle. The Ashtonk!mania tests include an end-to-end run
 through the DOM stub's `document -> window` capture path.
 

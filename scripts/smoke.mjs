@@ -199,6 +199,14 @@ check(
 );
 check("trainer artwork is embedded in the shipped bundle", userscriptCode.includes("data:image/jpeg;base64,"));
 check("trainer motion respects reduced-motion preferences", userscriptCode.includes("prefers-reduced-motion"));
+check("the UI prefers Torus over its rounded fallback",
+  userscriptCode.includes('"Torus", "Torus Regular", "Torus-Regular", "Keyfall Rounded"'));
+check("all six offline Comfortaa language subsets are embedded",
+  (userscriptCode.match(/data:font\/woff2;base64,/g) ?? []).length === 6);
+const fallbackLicense = await readFile(resolve(root, "assets/fonts/comfortaa/OFL.txt"), "utf8");
+check("the complete fallback font license accompanies both distributed scripts",
+  userscriptCode.includes("@license      MIT AND OFL-1.1") &&
+  userscriptCode.includes(fallbackLicense) && code.includes(fallbackLicense));
 
 const api = env.window.Keyfall;
 check("exposes window.Keyfall", !!api);

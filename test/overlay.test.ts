@@ -187,6 +187,12 @@ describe("trainer overlay", () => {
     assert.match(css, /grid-template-rows \.38s/);
     assert.match(css, /prefers-reduced-motion: reduce/);
   });
+
+  it("prefers an available Torus font before the bundled rounded fallback", () => {
+    const css = buildCss("#ff6b9d");
+    assert.match(css, /font: 13px\/1\.35 "Torus", "Torus Regular", "Torus-Regular", "Keyfall Rounded"/);
+    assert.match(css, /button, .* input \{ font-family: inherit/);
+  });
 });
 
 describe("Right Shift hotkey", () => {

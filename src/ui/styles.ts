@@ -1,11 +1,13 @@
 import { NAME } from "../constants";
 
 /**
- * The original, self-contained artwork is embedded by the build so the
- * userscript does not fetch images, fonts, or other resources from a site.
- * A gradient remains usable when these sources are imported directly in tests.
+ * Artwork and the OFL-licensed rounded fallback are embedded by the build, so
+ * the userscript never needs an external font or image request. Torus itself is
+ * not bundled; the CSS prefers it when the user's system or the page has it.
+ * A gradient and system fonts remain available when sources run directly in tests.
  */
 declare const __KEYFALL_COVER__: string;
+declare const __KEYFALL_FONT_CSS__: string;
 
 export const ROOT_CLASS = "wom-ap-root";
 export const STYLE_ID = "wom-ap-style";
@@ -14,10 +16,12 @@ const MOSAIC = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' wid
 
 export function buildCss(accent: string): string {
   const cover = typeof __KEYFALL_COVER__ === "undefined" ? "" : __KEYFALL_COVER__;
+  const fontCss = typeof __KEYFALL_FONT_CSS__ === "undefined" ? "" : __KEYFALL_FONT_CSS__;
   const artwork = cover
     ? `linear-gradient(0deg, rgba(26,20,35,.69), rgba(33,25,43,.12) 68%), url("${cover}")`
     : "linear-gradient(120deg, #a47597, #c2a0b6 38%, #739ba4 75%, #d8b899)";
   return `
+${fontCss}
 .${ROOT_CLASS} {
   --wom-accent: ${accent};
   --wom-bg: #252132;
@@ -32,7 +36,7 @@ export function buildCss(accent: string): string {
   position: fixed;
   z-index: 2147483000;
   color: var(--wom-text);
-  font: 13px/1.35 "Segoe UI", -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+  font: 13px/1.35 "Torus", "Torus Regular", "Torus-Regular", "Keyfall Rounded", -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
   text-align: left;
   letter-spacing: normal;
   -webkit-font-smoothing: antialiased;
@@ -118,8 +122,8 @@ export function buildCss(accent: string): string {
 /* Flat, thin trainer sliders. The native range control retains accurate
    pointer dragging and keyboard support; only the thumb's hover state eases. */
 .wom-quick-sliders { padding: 4px 18px 0; }
-.wom-slider-row { display: grid; grid-template-columns: 76px 49px minmax(0, 1fr) 20px; align-items: center; gap: 5px; min-height: 28px; }
-.wom-slider-wide { grid-template-columns: minmax(87px, 1fr) 52px minmax(80px, 2fr) 20px; }
+.wom-slider-row { display: grid; grid-template-columns: 80px 49px minmax(0, 1fr) 20px; align-items: center; gap: 5px; min-height: 28px; }
+.wom-slider-wide { grid-template-columns: minmax(96px, 1fr) 52px minmax(0, 2fr) 20px; }
 .wom-slider-label { color: #b4b0fa; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wom-slider-value { color: #e8e7f8; font-size: 13px; font-weight: 600; text-align: left; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .${ROOT_CLASS} .wom-range { appearance: none; -webkit-appearance: none; width: 100%; min-width: 0; height: 22px; padding: 0; margin: 0; border: 0; outline: none; background: transparent; cursor: pointer; }
@@ -220,8 +224,8 @@ export function buildCss(accent: string): string {
 .${ROOT_CLASS} button:focus-visible, .${ROOT_CLASS} input:focus-visible { outline: 2px solid #cabdff; outline-offset: 2px; }
 .wom-hidden { display: none !important; }
 @container (max-width: 350px) {
-  .wom-slider-row { grid-template-columns: 55px 39px minmax(0,1fr) 18px; gap: 3px; }
-  .wom-slider-wide { grid-template-columns: 75px 43px minmax(0,1fr) 18px; }
+  .wom-slider-row { grid-template-columns: 66px 39px minmax(0,1fr) 18px; gap: 3px; }
+  .wom-slider-wide { grid-template-columns: 82px 43px minmax(0,1fr) 18px; }
   .wom-slider-label, .wom-slider-value, .wom-quick-label, .wom-quick-value, .wom-switch-label { font-size: 11px; }
   .wom-quick-label { min-width: 55px; }
   .wom-quick-grid { padding-left: 12px; padding-right: 12px; }
