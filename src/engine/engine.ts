@@ -472,7 +472,13 @@ export class Engine {
         this.game = acquired.game;
         this.detectedVia = acquired.via;
         this.lastError = result.reason ?? "";
-        this.setPhase("ERROR");
+        // Stale chart/mapping must not survive an unsupported or broken session.
+        // Otherwise `ensureDetected()` could start a run that just failed.
+        this.chart = null;
+        this.timeline = null;
+        this.keyMapping = null;
+        this.lastChartSignature = "";
+        this.setPhase("ERROR", result.reason ?? "Detection incomplete");
       }
       this.log("warn", result.reason ?? "Detection incomplete");
       return;
@@ -535,7 +541,13 @@ export class Engine {
       return { ok: true, via: this.detectedVia, game: this.game, chart: this.chart, keyMapping: this.keyMapping };
     }
     this.tryDetect();
-    if (!this.game || !this.chart || !this.keyMapping) {
+    if (
+      !this.game ||
+      !this.chart ||
+      !this.keyMapping ||
+      !this.isGameAlive() ||
+      this.phase === "ERROR"
+    ) {
       // Last resort: a chart captured from the network but no live game. We can
       // describe it but cannot time against it, so report honestly.
       const fallback = getLatestChart();
@@ -663,7 +675,10 @@ export class Engine {
   private onFire(actions: InputAction[], _hostNow: number, targetChartTime: number): void {
     if (this.phase !== "RUNNING") return;
     if (!this.isGameAlive()) {
-      this.safeStop("Gameplay ended");
+      const policy = this.game?.unsupportedReason;
+      this.safeStop(
+        typeof policy === "string" && policy.length > 0 ? policy : "Gameplay ended",
+      );
       return;
     }
 
@@ -779,6 +794,16 @@ export class Engine {
     }
 
     if (!this.isGameAlive()) {
+      const policy = this.game?.unsupportedReason;
+      if (typeof policy === "string" && policy.length > 0) {
+        this.lastError = policy;
+        this.input.releaseAll();
+        this.scheduler.stop();
+        this.stopStatsLoop();
+        this.setPhase("ERROR", policy);
+        this.log("warn", policy);
+        return;
+      }
       const state = this.game?.state;
       if (state === "FAIL") {
         this.input.releaseAll();
@@ -904,6 +929,12 @@ export class Engine {
       if (canvas instanceof Element && !canvas.isConnected) return false;
     }
 
+    // A site adapter's policy refusal (ranked/online mode, replay, Auto mod,
+    // non-linear rate mod) is terminal for this live session.
+    if (typeof game.unsupportedReason === "string" && game.unsupportedReason.length > 0) {
+      return false;
+    }
+
     // FAIL is a real end-of-play state; treat the run as over.
     if (game.state === "FAIL") return false;
 
@@ -973,6 +1004,7 @@ export class Engine {
       phase: this.phase,
       via: this.detectedVia,
       site: this.siteCheck?.verdict ?? "unknown",
+      siteFamily: this.siteCheck?.family ?? "unknown",
       chart: this.chart
         ? {
             keyCount: this.chart.keyCount,

@@ -61,6 +61,8 @@ export class StubKeyboardEvent {
   readonly bubbles: boolean;
   readonly cancelable: boolean;
   readonly composed: boolean;
+  /** Real browsers stamp synthetic KeyboardEvents at dispatch time. */
+  readonly timeStamp: number;
   readonly location: number;
   readonly altKey: boolean;
   readonly ctrlKey: boolean;
@@ -79,6 +81,8 @@ export class StubKeyboardEvent {
     this.bubbles = init.bubbles !== false;
     this.cancelable = Boolean(init.cancelable);
     this.composed = Boolean(init.composed);
+    const timestamp = Number(init.timeStamp);
+    this.timeStamp = Number.isFinite(timestamp) ? timestamp : performance.now();
     this.location = Number(init.location ?? 0);
     this.altKey = Boolean(init.altKey);
     this.ctrlKey = Boolean(init.ctrlKey);

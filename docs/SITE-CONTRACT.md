@@ -1,9 +1,13 @@
 # The Web osu!mania contract
 
-Everything Keyfall does depends on a small set of facts about how
+Everything Keyfall's original path depends on is a small set of facts about how
 [Web osu!mania](https://webosumania.com/) is built. They are written down here
 so that when the site changes, the fix is a targeted edit rather than an
 archaeological dig.
+
+Ashtonk!mania is a separate codebase with its own adapter. See
+[`ASHTONK-CONTRACT.md`](./ASHTONK-CONTRACT.md) for its session, chart, clock,
+input and fair-play contract.
 
 Verified against the public source at
 [`HecticKiwi/Web-Osu-Mania`](https://github.com/HecticKiwi/Web-Osu-Mania)

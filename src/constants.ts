@@ -2,7 +2,7 @@ import { DEFAULT_HUMANIZATION } from "./humanize/humanizer";
 import type { Settings } from "./types";
 
 export const NAME = "Keyfall";
-export const VERSION = "1.1.1";
+export const VERSION = "1.2.0";
 
 /** localStorage key for persisted settings. Versioned so we can migrate. */
 export const STORAGE_KEY = "keyfall:settings:v1";
@@ -24,6 +24,21 @@ export const KNOWN_HOSTS = [
 
 /** Localhost dev servers for the site's own repo (`npm run dev`). */
 export const DEV_HOST_PATTERN = /^(localhost|127\.0\.0\.1|\[::1\])$/;
+
+/**
+ * Ashtonk!mania deployments. The live v2 build the adapter targets is
+ * `v2-ashtonkmania.lokaux.workers.dev`; the pattern also recognises future
+ * `vN-` deployments and subdomains of the main deployment.
+ */
+export const ASHTONK_HOSTS = [
+  "v2-ashtonkmania.lokaux.workers.dev",
+  "ashtonkmania.lokaux.workers.dev",
+];
+export const ASHTONK_HOST_PATTERN =
+  /^(?:v\d+-)?ashtonkmania\.lokaux\.workers\.dev$/i;
+
+/** Public global exported by Ashtonk!mania's app bootstrap. */
+export const ASHTONK_APP_GLOBAL = "AshtonkMania";
 
 /** The global the site sets for the Pixi devtools extension while playing. */
 export const PIXI_APP_GLOBAL = "__PIXI_APP__";

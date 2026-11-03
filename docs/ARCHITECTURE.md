@@ -21,11 +21,12 @@
         │ siteDetection  │  │ clock          │  │ InputManager   │
         │ pixiHook       │  │ scheduler      │  └───────┬────────┘
         │ fiber          │  └───────▲────────┘          │
-        │ buildContext   │          │                   │
-        │ chartSource    │  ┌───────┴────────┐          │
-        │ osuFileParser  │  │  chart/        │          │
-        └────────┬───────┘  │  timeline      │          │
-                 │          └────────────────┘          │
+        │ ashtonkAdapter │          │                   │
+        │ buildContext   │  ┌───────┴────────┐          │
+        │ chartSource    │  │  chart/        │          │
+        │ osuFileParser  │  │  timeline      │          │
+        └────────┬───────┘  └────────────────┘          │
+                 │                                      │
                  └──────────────────────────────────────┘
                                 │
                     ┌───────────▼────────────┐
@@ -34,15 +35,15 @@
                     └───────────┬────────────┘
                                 │
                     ┌───────────▼────────────┐
-                    │   Web osu!mania's own   │
-                    │   InputSystem → scoring │
+                    │  the site's own input   │
+                    │   system → scoring      │
                     └────────────────────────┘
 ```
 
 Data flow for one beatmap:
 
 ```
-Game detected → ParsedChart ─┐
+Site adapter → GameLike → ParsedChart ─┐
                              ├→ Humanizer.prepare()   (optional; per-note deltas
 ChartAnalysis ◄──────────────┘                          and release ceilings)
                              │
@@ -59,7 +60,7 @@ ChartAnalysis ◄──────────────┘                  
                  document KeyboardEvents
                              │
                              ▼
-            site's InputSystem.hit/release
+            site's input system (document / window capture)
                              │
                              ▼
             site's ScoreSystem → stats readback
@@ -73,10 +74,11 @@ the timeline and the scheduler. See
 
 | Module | Owns | Deliberately does *not* do |
 |---|---|---|
-| `detect/siteDetection` | "is this Web osu!mania?" | Anything about gameplay |
-| `detect/pixiHook` | Ordered acquisition strategies | Interpreting the game it finds |
-| `detect/fiber` | React fiber traversal, shape-based `Game` recognition | Any name-based coupling |
-| `detect/buildContext` | `Game` → `ParsedChart` + `KeyMapping` | Scheduling or input |
+| `detect/siteDetection` | "which supported site is this?" | Anything about gameplay |
+| `detect/pixiHook` | Site-specific ordered acquisition strategies | Interpreting the game it finds |
+| `detect/fiber` | WOM React fiber traversal, shape-based `Game` recognition | Any name-based coupling |
+| `detect/ashtonkAdapter` | `window.AshtonkMania` + `GameplayScreen.s` → `GameLike` | Scheduling, input, score submission, or enabling `AT` |
+| `detect/buildContext` | `GameLike` → `ParsedChart` + `KeyMapping` | Scheduling or input |
 | `detect/osuFileParser` | `.osu` text → chart (fallback) | Reading the live game |
 | `detect/chartSource` | Read-only `.osz` observation + minimal ZIP reader | Modifying any request |
 | `chart/timeline` | Chart → ordered `InputAction[]`, pattern analysis | Timing or input |
@@ -94,6 +96,21 @@ the timeline and the scheduler. See
 The rule throughout: **each layer only sees the types of the layer below it.**
 Nothing downstream of `buildContext` ever touches a site object, which is what
 makes the detection strategies independently replaceable.
+
+### Why a second site needs only an adapter
+
+Ashtonk!mania has no Pixi/React `Game`, stores notes as `{ col, time, end,
+isLN }`, installs input listeners on `window` capture, and judges against an
+AudioContext-derived `inputTime`. `src/detect/ashtonkAdapter.ts` projects that
+live practice session onto the same `GameLike` getters the engine already reads:
+`hitObjects`, `timeElapsed`, `state`, `columnKeybinds`, `scoreSystem`,
+`chartSignature` and `unsupportedReason`.
+
+There is still exactly one timeline, one `ClockMapper`, one `Scheduler`, one
+`InputManager`, one humanizer and one overlay. The adapter never calls the
+site's Auto (`AT`), replay feed, private judgement engine, or score submission.
+Because Ashtonk!mania has ranked/online leaderboards, it refuses everything
+except Practice mode. See [`ASHTONK-CONTRACT.md`](./ASHTONK-CONTRACT.md).
 
 ## Design decisions worth knowing
 
@@ -270,8 +287,9 @@ retrospectively, which made the counts depend on arrival order.
 
 ## Testing
 
-229 tests, `node --test`, no test framework dependency, plus a 28-check smoke test
-that runs the shipped bundle.
+254 tests, `node --test`, no test framework dependency, plus a 46-check smoke test
+that runs the shipped bundle. The Ashtonk!mania tests include an end-to-end run
+through the DOM stub's `document -> window` capture path.
 
 Node strips TypeScript types natively (≥22.18) but still requires fully
 specified ESM paths, while the source uses extensionless imports (correct for a

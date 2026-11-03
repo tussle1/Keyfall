@@ -192,9 +192,15 @@ export function buildChartFromGame(
   // The signature identifies "is this the same chart?" and must depend only on
   // structural facts. It used to fold in the label, which meant any change to
   // how a chart is *described* looked like the user switching beatmaps.
-  const signature = hashString(
-    `${effectiveKeyCount}|${notes.length}|${noteCount}|${Math.round(startTime)}|${Math.round(endTime)}`,
-  );
+  // Site adapters may know about structural details that the generic signature
+  // cannot see (e.g. Ashtonk's `random` column permutation, practice loops and
+  // replaced `s.engine` objects). Prefer that identity when supplied.
+  const signature =
+    typeof game.chartSignature === "string" && game.chartSignature.length > 0
+      ? game.chartSignature
+      : hashString(
+          `${effectiveKeyCount}|${notes.length}|${noteCount}|${Math.round(startTime)}|${Math.round(endTime)}`,
+        );
 
   return {
     keyCount: effectiveKeyCount,
@@ -222,7 +228,7 @@ export function buildChartFromGame(
  * Rather than guess, this describes what is actually known: the key count, how
  * many objects the chart holds, and the playfield's time span. When a title is
  * available — the fallback `.osz` path parses one out of the `[Metadata]`
- * section — the caller passes it in.
+ * section, or the Ashtonk!mania adapter exposes `s.rec` — it is used instead.
  */
 function describeGame(game: GameLike, keyCount: number, noteCount: number, startTime: number, endTime: number): string {
   const meta = (game as { metadata?: { title?: unknown; artist?: unknown; version?: unknown } }).metadata;
@@ -244,6 +250,13 @@ export function buildContextFromGame(
   settings: Settings,
   via: string,
 ): DetectionResult {
+  // A site adapter can refuse a live session for reasons the generic guards do
+  // not know about (ranked/online modes, replays, non-linear rate mods, ...).
+  // Surface that reason before trying to parse or schedule anything.
+  if (typeof game.unsupportedReason === "string" && game.unsupportedReason.length > 0) {
+    return { ok: false, via, game, reason: game.unsupportedReason };
+  }
+
   const keyCount = readKeyCount(game);
   if (!keyCount || keyCount < MIN_KEY_COUNT || keyCount > MAX_KEY_COUNT) {
     return {
@@ -292,7 +305,7 @@ export function buildContextFromGame(
   }
 
   // A replay in progress drives input itself; don't fight it.
-  if ((game as any).replayPlayer) {
+  if (game.replayPlayer) {
     return {
       ok: false,
       via,

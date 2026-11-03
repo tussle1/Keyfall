@@ -141,12 +141,19 @@ const check = (name, condition, detail = "") => {
 };
 
 const bundlePath = resolve(root, "dist/keyfall.js");
+const userscriptPath = resolve(root, "dist/keyfall.user.js");
 let code;
+let userscriptCode = "";
 try {
   code = await readFile(bundlePath, "utf8");
 } catch {
   console.error(`\n  ✗ ${bundlePath} not found — run "npm run build" first.\n`);
   process.exit(1);
+}
+try {
+  userscriptCode = await readFile(userscriptPath, "utf8");
+} catch {
+  // Reported as a failed check below so the rest of the smoke test still runs.
 }
 
 const fake = makeFakeGame();
@@ -159,6 +166,29 @@ try {
 } catch (err) {
   check("bundle evaluates without throwing", false, err?.message ?? String(err));
 }
+
+/* ---------------- multi-site shipped-artifact checks ------------------ */
+
+check(
+  "bundle contains the Ashtonk!mania adapter",
+  code.includes("AshtonkMania") && code.includes("ashtonkGlobal"),
+);
+check(
+  "userscript still matches Web osu!mania",
+  userscriptCode.includes("@match        https://webosumania.com/*"),
+);
+check(
+  "userscript matches the requested v2 Ashtonk!mania host",
+  userscriptCode.includes("@match        https://v2-ashtonkmania.lokaux.workers.dev/*"),
+);
+check(
+  "userscript uses only valid exact/subdomain @match host patterns",
+  !userscriptCode.includes("@match        https://*ashtonkmania.lokaux.workers.dev/*"),
+);
+check(
+  "userscript description disclaims the sites' built-in Autoplay",
+  /Never uses either site's built-in Autoplay\/Auto mod/.test(userscriptCode),
+);
 
 const api = env.window.Keyfall;
 check("exposes window.Keyfall", !!api);

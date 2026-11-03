@@ -76,7 +76,15 @@ export interface GameLike {
     hit?: (column: number, time?: number) => void;
     release?: (column: number, time?: number) => void;
   };
-  scoreSystem?: Record<string, unknown>;
+  scoreSystem?: Record<string, unknown> | null;
+  /** Site-provided beatmap metadata, used only for the overlay's chart label. */
+  metadata?: { title?: string; artist?: string; version?: string };
+  /** Optional adapter-supplied structural identity for the active chart. */
+  chartSignature?: string;
+  /** Set when a site adapter intentionally refuses this live session. */
+  unsupportedReason?: string;
+  /** Present while a site replay is driving input. */
+  replayPlayer?: unknown;
   accuracyText?: { text?: string } | null;
   comboText?: { text?: string } | null;
   scoreText?: { text?: string } | null;

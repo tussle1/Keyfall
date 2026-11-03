@@ -1,10 +1,13 @@
 # Maintaining Keyfall when the site changes
 
-The site is actively developed. This is the triage order.
+Both supported sites are actively developed. This is the triage order. Use
+`Keyfall.diagnostics().siteFamily` to see whether the WOM or Ashtonk!mania
+adapter is active.
 
 ## Step 1: work out which layer broke
 
-Open devtools on `webosumania.com`, start a map, and run:
+Open devtools on a supported host (`webosumania.com` or
+`v2-ashtonkmania.lokaux.workers.dev`), start a map, and run:
 
 ```js
 Keyfall.diagnostics()
@@ -15,7 +18,8 @@ Read it top-down:
 ```js
 {
   site: "confirmed",     // ← wrong?  detect/siteDetection.ts
-  via: "pixiGlobal",     // ← null?   detect/pixiHook.ts strategies
+  siteFamily: "webosumania" | "ashtonkmania",
+  via: "pixiGlobal" | "ashtonkGlobal" | "canvasScan" | "fiberProbe" | null,  // ← null? detect/pixiHook.ts
   chart: { keyCount, notes, actions, signature },  // ← null?  detect/buildContext.ts
   mapping: { source, codes },   // ← source "fallback"?  keybinds moved
   clock: { slope, errorMs, confident },  // ← not confident?  timing/clock.ts
@@ -33,12 +37,25 @@ directly.
 
 ### `via` is null — the game can't be found
 
-Most likely `window.__PIXI_APP__` went away. Check in the console:
+First check which site family is active. On Web osu!mania, most likely
+`window.__PIXI_APP__` went away:
 
 ```js
-window.__PIXI_APP__            // the site sets this during play
+window.__PIXI_APP__            // WOM sets this during play
 document.querySelectorAll("canvas").length
 ```
+
+On Ashtonk!mania, check the exported app and live practice session:
+
+```js
+window.AshtonkMania?.GameplayScreen?.s
+window.AshtonkMania?.Screens?.currentName
+window.AshtonkMania?.GameplayScreen?.loaderGone
+window.AshtonkMania?.GameplayScreen?.s?.engine?.notes?.length
+```
+
+`via` stays null before `loaderGone`, outside the gameplay screen, after a
+finished/failed play, or when the session is not in Practice mode.
 
 If the global is gone, strategy 2 (viewport-sized canvas → fiber) should still
 work. If React changed its internals, check the fiber key prefix:
@@ -66,7 +83,13 @@ game.columnKeybinds    → [[primary, secondary], …]
 game.settings.keybinds.keyModes
 game.mods.autoplay
 game.replayPlayer
+game.chartSignature     // adapter-supplied structural identity
+game.unsupportedReason  // adapter policy refusal
+game.metadata           // optional chart label fields
 ```
+
+If `unsupportedReason` is set, `buildContextFromGame` refuses before parsing.
+On Ashtonk!mania that is intentional for ranked/online/replay/Auto modes.
 
 Each has a fallback (`readKeyCount` tries `difficulty`, then
 `columnKeybinds.length`, then `inputSystem.pressedColumns.length`). Update the
@@ -96,6 +119,11 @@ If not, look at what the handler now requires. If it is an `isTrusted` check,
 **there is no fix** — see `docs/SAFETY.md`. The desync verifier will detect this
 within about six checks and stop safely with an explanatory message rather than
 silently doing nothing.
+
+On Ashtonk!mania the site listens on `window` capture rather than `document`
+bubble. A document-dispatched event with `bubbles: true` still reaches it in a
+real browser; if the site moves those listeners into a shadow root or stops
+propagation earlier, check `test/ashtonkAdapter.test.ts`'s window-capture path.
 
 If the receptor lights up but notes are not judged, the column mapping is wrong;
 compare `diagnostics().mapping.codes` against the site's Settings → Keybinds.
@@ -146,28 +174,33 @@ Keyfall.chart.notes.slice(0, 40)
 If holds are no longer duplicated, the pre-pass is harmless but `noteCount`
 will be off; if they are duplicated differently, update the `holdKeys` logic.
 
-## Step 3: add a new detection strategy
+## Step 3: add a new detection strategy / adapter
 
 Strategies are independent functions in `detect/pixiHook.ts`:
 
 ```ts
 export const STRATEGIES: Strategy[] = [
-  { name: "pixiGlobal", cost: "low",    run: viaPixiGlobal },
-  { name: "canvasScan", cost: "medium", run: viaCanvasScan },
-  { name: "fiberProbe", cost: "high",   run: viaAnyFiber },
+  { name: "pixiGlobal",    cost: "low",    site: "webosumania",  run: viaPixiGlobal },
+  { name: "ashtonkGlobal", cost: "low",    site: "ashtonkmania", run: viaAshtonkGlobal },
+  { name: "canvasScan",    cost: "medium", site: "webosumania",  run: viaCanvasScan },
+  { name: "fiberProbe",    cost: "high",   site: "webosumania",  run: viaAnyFiber },
   // add here — ordered cheapest and most reliable first
 ];
 ```
 
 Each returns `GameLike | null` and is called inside a `try`/`catch`, so a new
-strategy that throws cannot break the others. Nothing else needs to change:
-`acquireGame` reports which one succeeded, and that string appears in
+strategy that throws cannot break the others. `acquireGame` filters by
+`siteFamily`, reports which one succeeded, and that string appears in
 `diagnostics().via`.
+
+A new site should normally get one **adapter** that projects its live session
+onto `GameLike`, not a second scheduler or input path. Keep the fair-play guards
+in the adapter's `unsupportedReason`; do not add engine-level exceptions.
 
 ## Step 4: verify
 
 ```bash
-npm run verify     # typecheck + 229 tests + shipped-bundle smoke test
+npm run verify     # typecheck + 254 tests + 46-check shipped-bundle smoke test
 ```
 
 If you changed timing or ordering behaviour, add a test. The two bugs that were
@@ -189,10 +222,17 @@ Then check by hand against the real site, in this order:
 9. Enable humanization at strength 1 with hold-release variation and fatigue at
    maximum, on the densest chart you have. Confirm no stuck key and that every
    press is matched by a release.
+10. On Ashtonk!mania, repeat the basic chart checks in **Practice** mode only.
+    Confirm normal/ranked, multiplayer, daily, replay, spectate, `AT` and
+    variable-rate modes are refused with a readable notice, and that no score is
+    submitted. Confirm windows-capture input works and high-key hotkey
+    collisions are surfaced.
 
 ## Reference
 
-- Site source: <https://github.com/HecticKiwi/Web-Osu-Mania>
+- Web osu!mania source: <https://github.com/HecticKiwi/Web-Osu-Mania>
+- Ashtonk!mania source: <https://github.com/ashtonkehler14-glitch/Ashtonk-mania>
 - `.osu` format: <https://osu.ppy.sh/wiki/en/Client/File_formats/osu_(file_format)>
 - osu!mania V2 scoring / hit windows: <https://osu.ppy.sh/wiki/en/Gameplay/Scoring>
-- The contract this tool depends on: [`SITE-CONTRACT.md`](./SITE-CONTRACT.md)
+- WOM contract: [`SITE-CONTRACT.md`](./SITE-CONTRACT.md)
+- Ashtonk!mania contract: [`ASHTONK-CONTRACT.md`](./ASHTONK-CONTRACT.md)

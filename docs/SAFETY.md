@@ -2,9 +2,11 @@
 
 ## What Keyfall is
 
-Browser-side gameplay automation for a single-player rhythm game running in
+Browser-side gameplay automation for supported browser rhythm games running in
 your own browser tab. It reads the chart the page has already loaded and
-dispatches ordinary DOM `KeyboardEvent`s on `document`.
+dispatches ordinary DOM `KeyboardEvent`s on `document`. On Ashtonk!mania it is
+limited to **Practice mode**; ranked, multiplayer, daily, replay, spectate and
+Auto/AT modes are refused.
 
 It is built entirely from standard, publicly documented browser APIs:
 `addEventListener`, `dispatchEvent`, `KeyboardEvent`, `performance.now`,
@@ -26,8 +28,9 @@ position Keyfall occupies:
 - **No credential or cookie access.** `document.cookie` is never read. No
   storage belonging to the site is read or written; the tool's own settings live
   under a single namespaced `localStorage` key.
-- **No account manipulation.** Nothing submits forms, calls authenticated
-  endpoints, or mutates site state.
+- **No account manipulation or score submission.** Nothing submits forms, calls
+  authenticated endpoints, calls `Verified.submit`, or mutates site state. The
+  Ashtonk!mania adapter refuses any mode that would submit a ranked/online score.
 - **No network modification.** The `.osz` sniffer is strictly read-only:
   responses are `clone()`d and observed, requests are never altered, blocked,
   delayed or replayed.
@@ -39,8 +42,8 @@ position Keyfall occupies:
 
 Every input Keyfall produces is `isTrusted === false`. Any site that checks
 `event.isTrusted` — a one-line change in `handleKeyDown` — renders this entire
-approach inert. Web osu!mania does not check it today, which is the only reason
-this works at all.
+approach inert. Neither supported site requires trusted keyboard events for the
+local input paths Keyfall uses today, which is the only reason this works at all.
 
 That asymmetry is worth stating plainly: Keyfall is not robust against a site
 author who decides they do not want it. It is a client-side convenience, not an
@@ -48,21 +51,23 @@ adversarial capability.
 
 ## Fair play
 
-Web osu!mania keeps **local** high scores. As far as the public source shows,
-there is no global leaderboard, no ranked submission and no multiplayer, so
-running this does not take anything from another player.
+Web osu!mania's original design kept **local** high scores. Ashtonk!mania, by
+contrast, has ranked, multiplayer and daily-challenge leaderboards with
+server-side verification. That difference is why the Ashtonk!mania adapter is
+**Practice-mode only**: normal/ranked play, multiplayer, daily challenges,
+replays, spectating and the site's `AT` Auto mod are all refused before any
+input is produced. Practice plays do not call `Verified.submit`.
 
-That is the current state of the site, not a permanent property of it. Two
-things follow:
+Both supported sites ship their own Autoplay/Auto feature. If you simply want
+to watch a map played perfectly using the developer's sanctioned feature, use
+that instead. Keyfall explicitly refuses to run while either built-in Auto mod
+is enabled, and never calls `generateAutoReplay` or `generateAutoInputs`.
 
-1. **The site already ships an Autoplay mod** (Settings → Mods → Autoplay, backed
-   by `generateAutoReplay`). If you simply want to watch a map played perfectly,
-   use that. It is frame-exact, needs no timing model, and is the developer's
-   own sanctioned feature. This tool explicitly refuses to run while that mod is
-   enabled.
-2. If the site ever adds ranked or shared leaderboards, submitting a score
-   produced by automation would be cheating, and would also be trivially
-   detectable via `isTrusted`. Do not do it.
+If Web osu!mania adds — or already has on a particular deployment — ranked or
+shared leaderboards, submitting an automated score would be cheating and would
+also be trivially detectable via `isTrusted`. Do not do it. Do not use
+humanization to try to make an automated Ashtonk!mania score look legitimate;
+the practice-only gate exists so that question never arises.
 
 Use this for practice reference, pattern study, testing your own charts,
 accessibility, or watching a map you cannot yet play. Do not use it to claim a
@@ -89,8 +94,9 @@ evasion would want: two runs with the same seed produce byte-identical timing.
 That is a deliberate trade. Reproducibility is what makes a humanized run
 comparable, debuggable and worth studying; anything else would be noise.
 
-If a site ever added ranked or shared leaderboards, a humanized run would be no
-more legitimate than a frame-exact one, and no harder to detect.
+Ranked/shared leaderboards already exist on Ashtonk!mania, which is precisely
+why a humanized Keyfall run is never submitted there. A humanized run would be
+no more legitimate than a frame-exact one, and no harder to detect.
 
 ## Runtime safety
 
@@ -134,8 +140,11 @@ breaks the run, and can persist into the next screen. Defences, in layers:
 |---|---|
 | Site adds an `isTrusted` check | Input silently stops registering; the desync verifier detects it within ~6 checks and stops safely with an explanatory message |
 | `random` mod enabled | Live-game path works. The `.osu` fallback path refuses, because the column permutation is generated at runtime and never persisted |
-| Site's Autoplay mod enabled | Refuses to start, with a message telling you to disable it |
-| A replay is playing | Refuses to start; the site's `ReplayPlayer` already drives input |
+| Site's Autoplay / `AT` mod enabled | Refuses to start, with a message telling you to disable it |
+| A replay is playing | Refuses to start; the site's `ReplayPlayer` / `s.feed` already drives input |
+| Ashtonk!mania normal, ranked, multiplayer or daily play | Refuses with a Practice-mode notice rather than submitting an automated score |
+| Ashtonk!mania Wind Up / Wind Down / Adaptive Speed | Refuses; those mods change the clock non-linearly and Keyfall's clock model is linear |
+| Ashtonk!mania high-key layout collides with `G`/`B`/`X`/`Z` hotkeys | Collision warning is surfaced; rebind the hotkeys in Settings → Input |
 | Beatmap fails to download | No chart detected; overlay reports it, no input is produced |
 | Keybind changed mid-run | Desync verifier stops the run rather than playing the wrong columns |
 | Tab backgrounded mid-hold | Keys released, engine paused, resumes on return |

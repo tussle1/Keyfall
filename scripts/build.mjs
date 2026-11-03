@@ -28,13 +28,15 @@ const USERSCRIPT_HEADER = `// ==UserScript==
 // @version      ${pkg.version}
 // @updateURL    https://raw.githubusercontent.com/tussle1/Keyfall/main/release/keyfall.user.js
 // @downloadURL  https://raw.githubusercontent.com/tussle1/Keyfall/main/release/keyfall.user.js
-// @description  Keyfall — detects the live Web osu!mania chart and plays it through the site's own keyboard input path. Optional reproducible timing humanization. Local, single-player automation only.
+// @description  Keyfall — its own keyboard-event autoplay for Web osu!mania and Ashtonk!mania Practice mode. Never uses either site's built-in Autoplay/Auto mod. Optional reproducible timing humanization.
 // @author       tussle1
 // @match        https://webosumania.com/*
 // @match        https://www.webosumania.com/*
 // @match        https://*.webosumania.com/*
 // @match        https://web-osu-mania.pages.dev/*
 // @match        https://web-osu-mania.vercel.app/*
+// @match        https://v2-ashtonkmania.lokaux.workers.dev/*
+// @match        https://ashtonkmania.lokaux.workers.dev/*
 // @match        http://localhost:*/*
 // @match        http://127.0.0.1:*/*
 // @run-at       document-start
@@ -44,7 +46,7 @@ const USERSCRIPT_HEADER = `// ==UserScript==
 // ==/UserScript==
 `;
 
-const BANNER = `/*! Keyfall v${pkg.version} — browser-side autoplay automation for Web osu!mania (webosumania.com). */`;
+const BANNER = `/*! Keyfall v${pkg.version} — its own keyboard-event autoplay for Web osu!mania and Ashtonk!mania Practice mode. Never uses either site's built-in Autoplay/Auto mod. */`;
 
 /** Shared esbuild options. */
 const baseOptions = {

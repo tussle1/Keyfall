@@ -1,22 +1,31 @@
 import { PIXI_APP_GLOBAL } from "../constants";
 import type { GameLike } from "../types";
+import { acquireAshtonkGame, hasAshtonkApi } from "./ashtonkAdapter";
 import { findGameFromElement, findGameViaPixiGlobal } from "./fiber";
+import { isAshtonkHost } from "./siteDetection";
 
 /**
  * Acquisition strategies, ordered by reliability.
  *
  * Each strategy is independent and returns `GameLike | null`, so a site change
- * that breaks one path leaves the others working. New paths are added by
- * pushing another function onto `STRATEGIES` — nothing else needs to change.
+ * that breaks one path leaves the others working. Web osu!mania exposes a Pixi
+ * `Game`; Ashtonk!mania exposes `window.AshtonkMania` and a live gameplay
+ * session instead. Both are projected onto the same `GameLike` contract so the
+ * rest of Keyfall never needs to know which site it is driving.
  */
 
-/** Strategy 1: the site's own `window.__PIXI_APP__` devtools global. */
+/** Web osu!mania strategy 1: the site's own `window.__PIXI_APP__` global. */
 function viaPixiGlobal(win: Window): GameLike | null {
   return findGameViaPixiGlobal(win);
 }
 
+/** Ashtonk!mania: read the exported app and adapt its live practice session. */
+function viaAshtonkGlobal(win: Window): GameLike | null {
+  return acquireAshtonkGame(win);
+}
+
 /**
- * Strategy 2: scan for the gameplay canvas directly.
+ * Web osu!mania strategy 2: scan for the gameplay canvas directly.
  *
  * Works even if the site stops setting the devtools global. The game canvas is
  * appended to a full-screen absolutely-positioned container, which distinguishes
@@ -41,7 +50,7 @@ function viaCanvasScan(win: Window): GameLike | null {
 }
 
 /**
- * Strategy 3: probe upward from any element that has a React fiber.
+ * Web osu!mania strategy 3: probe upward from any element that has a React fiber.
  * Slowest and least targeted; only used when the first two fail.
  * Budgeted so it can never stall the tab.
  */
@@ -65,29 +74,46 @@ export interface Strategy {
   name: string;
   /** Relative cost; used only for diagnostics ordering. */
   cost: "low" | "medium" | "high";
+  site: "webosumania" | "ashtonkmania";
   run: (win: Window) => GameLike | null;
 }
 
 export const STRATEGIES: Strategy[] = [
-  { name: "pixiGlobal", cost: "low", run: viaPixiGlobal },
-  { name: "canvasScan", cost: "medium", run: viaCanvasScan },
-  { name: "fiberProbe", cost: "high", run: viaAnyFiber },
+  { name: "pixiGlobal", cost: "low", site: "webosumania", run: viaPixiGlobal },
+  { name: "ashtonkGlobal", cost: "low", site: "ashtonkmania", run: viaAshtonkGlobal },
+  { name: "canvasScan", cost: "medium", site: "webosumania", run: viaCanvasScan },
+  { name: "fiberProbe", cost: "high", site: "webosumania", run: viaAnyFiber },
 ];
 
 /**
- * Try every strategy in order, returning the first hit.
+ * Try the strategies appropriate to this page, returning the first hit.
  * Errors in one strategy never prevent the others from running.
  */
 export function acquireGame(
   win: Window = window,
 ): { game: GameLike; via: string } | null {
-  // Fast path first: if the global is present we almost certainly win.
+  let host = "";
+  try {
+    host = win.location.hostname.toLowerCase();
+  } catch {
+    // A partially initialised window should still reach the global strategies.
+  }
+  const ashtonk = isAshtonkHost(host) || hasAshtonkApi(win);
   const hasGlobal = (win as any)[PIXI_APP_GLOBAL] != null;
 
-  const ordered = hasGlobal
-    ? STRATEGIES
-    : // Skip the global strategy when it is known to be absent.
-      STRATEGIES.filter((s) => s.name !== "pixiGlobal");
+  let ordered: Strategy[];
+  if (ashtonk) {
+    // Ashtonk has no React/Pixi `Game`; running Web osu!mania's canvas/fiber
+    // probes against it would just waste every 700ms detection poll.
+    ordered = STRATEGIES.filter((s) => s.site === "ashtonkmania");
+  } else if (hasGlobal) {
+    ordered = STRATEGIES.filter((s) => s.site === "webosumania");
+  } else {
+    // Skip the global strategy when it is known to be absent.
+    ordered = STRATEGIES.filter(
+      (s) => s.site === "webosumania" && s.name !== "pixiGlobal",
+    );
+  }
 
   for (const strategy of ordered) {
     try {
