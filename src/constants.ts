@@ -2,7 +2,7 @@ import { DEFAULT_HUMANIZATION } from "./humanize/humanizer";
 import type { Settings } from "./types";
 
 export const NAME = "Keyfall";
-export const VERSION = "1.5.0";
+export const VERSION = "1.5.1";
 
 /** The panel is deliberately available only from the physical Right Shift key. */
 export const UI_TOGGLE_CODE = "ShiftRight";

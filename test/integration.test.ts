@@ -576,6 +576,19 @@ describe("end-to-end autoplay", () => {
     assert.ok(late !== null && late > baseline!, `offset +50 fired at ${late}, baseline ${baseline}`);
   });
 
+  it("redetects a changed generic-site chart when the game instance is reused", () => {
+    const fake = createFakeGame({ hitObjects: [tap(0, 1000)] });
+    const settings = new SettingsManager(undefined, env.window);
+    const engine = new Engine({ settings, win: env.window });
+    engine.init();
+    assert.equal(engine.currentChart?.noteCount, 1);
+    fake.game.hitObjects.push(tap(1, 1500));
+    fake.game.endTime = 1500;
+    env.advance(800);
+    assert.equal(engine.currentChart?.noteCount, 2, "generic sites without a revision must still rebuild their fingerprint");
+    engine.dispose(); fake.dispose();
+  });
+
   it("detects a new beatmap without a page refresh", () => {
     const first = createFakeGame({ hitObjects: [tap(0, 1000), tap(1, 1200)] });
     const settings = new SettingsManager(undefined, env.window);
@@ -605,6 +618,98 @@ describe("end-to-end autoplay", () => {
 
     engine.dispose();
     second.dispose();
+  });
+
+  it("keeps a legitimate long hold through the watchdog and plays the following note", () => {
+    const fake = createFakeGame({ hitObjects: [hold(0, 1000, 31_000), tap(1, 32_000)] });
+    const settings = new SettingsManager(undefined, env.window);
+    const engine = new Engine({ settings, win: env.window });
+    engine.init(); engine.start();
+    for (let t = 0; t <= 32_400; t += 16) {
+      fake.game.timeElapsed = t;
+      env.advance(16); env.frame();
+      if (t > 21_100 && t < 30_900) {
+        assert.equal(engine.currentPhase, "RUNNING", "a scheduled hold is not a stuck key");
+        assert.equal(fake.pressedColumns[0], true);
+      }
+    }
+    assert.ok(fake.judged.some((event) => event.type === "release" && event.column === 0));
+    assert.ok(fake.judged.some((event) => event.type === "hit" && event.column === 1));
+    assert.ok(fake.pressedColumns.every((down) => !down));
+    engine.dispose(); fake.dispose();
+  });
+
+  it("releases an expired hold on a forward seek so the next note can play", () => {
+    const fake = createFakeGame({ hitObjects: [hold(0, 1000, 3000), tap(0, 5000)] });
+    const settings = new SettingsManager(undefined, env.window);
+    const engine = new Engine({ settings, win: env.window });
+    engine.init(); engine.start();
+    for (let t = 0; t <= 1200; t += 16) {
+      fake.game.timeElapsed = t; env.advance(16); env.frame();
+    }
+    assert.equal(fake.pressedColumns[0], true);
+    fake.game.timeElapsed = 4500; // a seek, not elapsed wall time
+    env.advance(16); env.frame();
+    assert.equal(fake.pressedColumns[0], false, "the old tail was skipped by the seek");
+    for (let t = 4516; t <= 5150; t += 16) {
+      fake.game.timeElapsed = t; env.advance(16); env.frame();
+    }
+    assert.equal(fake.judged.filter((event) => event.type === "hit" && event.column === 0).length, 2);
+    assert.ok(fake.pressedColumns.every((down) => !down));
+    engine.dispose(); fake.dispose();
+  });
+
+  it("preserves an active hold when seeking forward within its tail", () => {
+    const fake = createFakeGame({ hitObjects: [hold(0, 1000, 4000), tap(1, 5000)] });
+    const settings = new SettingsManager(undefined, env.window);
+    const engine = new Engine({ settings, win: env.window });
+    engine.init(); engine.start();
+    for (let t = 0; t <= 1200; t += 16) {
+      fake.game.timeElapsed = t; env.advance(16); env.frame();
+    }
+    fake.game.timeElapsed = 3000; env.advance(16); env.frame();
+    assert.equal(fake.pressedColumns[0], true, "a tail still ahead should remain held");
+    engine.dispose(); fake.dispose();
+  });
+
+  it("releases the old hold when seeking backward before its head", () => {
+    const fake = createFakeGame({ hitObjects: [hold(0, 1000, 3000), tap(1, 5000)] });
+    const settings = new SettingsManager(undefined, env.window);
+    const engine = new Engine({ settings, win: env.window });
+    engine.init(); engine.start();
+    for (let t = 0; t <= 1200; t += 16) {
+      fake.game.timeElapsed = t; env.advance(16); env.frame();
+    }
+    fake.game.timeElapsed = 500; env.advance(16); env.frame();
+    assert.equal(fake.pressedColumns[0], false, "the old press must not suppress the replayed head");
+    for (let t = 516; t <= 1100; t += 16) {
+      fake.game.timeElapsed = t; env.advance(16); env.frame();
+    }
+    assert.equal(fake.judged.filter((event) => event.type === "hit" && event.column === 0).length, 2);
+    engine.dispose(); fake.dispose();
+  });
+
+  it("survives a very long blocked-thread stall even if the watchdog wakes first", () => {
+    const fake = createFakeGame({ hitObjects: [hold(0, 1000, 2000), tap(1, 34_000)] });
+    const settings = new SettingsManager(undefined, env.window);
+    const engine = new Engine({ settings, win: env.window });
+    engine.init(); engine.start();
+    for (let t = 0; t <= 1200; t += 16) {
+      fake.game.timeElapsed = t; env.advance(16); env.frame();
+    }
+    assert.equal(fake.pressedColumns[0], true);
+    env.stall(30_000);
+    fake.game.timeElapsed += 30_000;
+    env.advance(0); // the old watchdog interval is delivered before the old scheduler timer
+    assert.equal(engine.currentPhase, "RUNNING", "a queued keyup must be allowed to recover");
+    env.frame();
+    assert.equal(fake.pressedColumns[0], false, "the expired hold is released");
+    for (let t = fake.game.timeElapsed + 16; t <= 34_300; t += 16) {
+      fake.game.timeElapsed = t; env.advance(16); env.frame();
+    }
+    assert.ok(fake.judged.some((event) => event.type === "hit" && event.column === 1), "later notes still play");
+    assert.ok(fake.pressedColumns.every((down) => !down));
+    engine.dispose(); fake.dispose();
   });
 
   it("stops safely and releases keys when the play fails mid-hold", () => {

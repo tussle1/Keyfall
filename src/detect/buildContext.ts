@@ -163,12 +163,11 @@ export function buildChartFromGame(
   // key count is wrong. Trust the chart.
   const effectiveKeyCount = Math.max(keyCount, maxColumn + 1);
 
-  const startTime = Number.isFinite(game.startTime) && game.startTime > 0
-    ? game.startTime
-    : minTime;
-  const endTime = Number.isFinite(game.endTime) && game.endTime > startTime
-    ? game.endTime
-    : maxEnd;
+  // Adapter getters may scan/convert the site's chart, so read each only once.
+  const liveStart = game.startTime;
+  const liveEnd = game.endTime;
+  const startTime = Number.isFinite(liveStart) && liveStart > 0 ? liveStart : minTime;
+  const endTime = Number.isFinite(liveEnd) && liveEnd > startTime ? liveEnd : maxEnd;
 
   const noteCount = countUniqueNotes(notes);
 
@@ -178,9 +177,10 @@ export function buildChartFromGame(
   // Site adapters may know about structural details that the generic signature
   // cannot see (e.g. Ashtonk's `random` column permutation, practice loops and
   // replaced `s.engine` objects). Prefer that identity when supplied.
+  const liveSignature = game.chartSignature;
   const signature =
-    typeof game.chartSignature === "string" && game.chartSignature.length > 0
-      ? game.chartSignature
+    typeof liveSignature === "string" && liveSignature.length > 0
+      ? liveSignature
       : hashString(
           `${effectiveKeyCount}|${notes.length}|${noteCount}|${Math.round(startTime)}|${Math.round(endTime)}`,
         );

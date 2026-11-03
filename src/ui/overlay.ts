@@ -85,7 +85,7 @@ const TIMING_SLIDERS: SliderSpec[] = [
   {
     label: "Lookahead", path: "timing.lookahead", min: LOOKAHEAD_MIN, max: LOOKAHEAD_MAX, step: 5,
     initial: DEFAULT_SETTINGS.timing.lookahead, read: (s) => s.timing.lookahead, unit: "ms",
-    title: "How far ahead to arm the scheduler.",
+    title: "How often to recheck the next deadline during long gaps.",
   },
   {
     label: "Delay", path: "timing.inputDelayCompensation", min: -100, max: 100, step: 1,

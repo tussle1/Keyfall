@@ -12,7 +12,7 @@ either site's built-in Autoplay/Auto mod.
 
 [![Status](https://img.shields.io/badge/status-active-success)](#disclaimer)
 [![Code license: MIT](https://img.shields.io/badge/code_license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.5.0-ff6b9d)](#installation)
+[![Version](https://img.shields.io/badge/version-1.5.1-ff6b9d)](#installation)
 [![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=000)](#development)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=fff)](#development)
 [![HTML5](https://img.shields.io/badge/HTML5-E34F26?logo=html5&logoColor=fff)](#try-it-without-the-site)
@@ -575,10 +575,11 @@ change that game binding so it does not conflict with the fixed panel shortcut.
 
 ## Performance
 
-- **One `requestAnimationFrame` loop** drives all scheduling. There is no timer
-  per note. Each frame flushes whatever is overdue and arms at most one timer for
-  the next same-timestamp batch.
-- **Binary search** (`lowerBound`) for timeline position — no scanning.
+- **One `requestAnimationFrame` heartbeat and one armed scheduler timer.** The
+  timer chains directly to the next batch, so delayed frames do not delay notes
+  when browser tasks and the game's clock are still running. Long gaps trigger
+  bounded deadline rechecks rather than pre-allocating a timer per note.
+- **Binary search** for timeline position and the end of an overdue backlog.
 - **Cached DOM references.** Every node the overlay updates is held as a field.
   Nothing queries the DOM per frame, and the site's game is read through cached
   references rather than re-traversed.
@@ -591,15 +592,19 @@ change that game binding so it does not conflict with the fixed panel shortcut.
 - **Write-coalesced settings.** Persistence is debounced at 250ms, so dragging a
   slider does not hammer `localStorage`.
 - **Event-driven detection**, with a 700ms poll only as the fallback.
-- **Chart parsed once.** The timeline is rebuilt only when something that actually
-  affects it changes — compared by signature, not on every settings write.
-- **Bounded work everywhere.** Catch-up is capped at 256 actions per frame and
-  reports an overrun instead of jamming every column at once. The precision
-  busy-spin has both an absolute deadline and a hard iteration cap, so a bad clock
-  prediction cannot freeze the tab.
+- **Lighter Ashtonk hot path.** The engine checks a cheap chart revision per
+  batch, verifies the full fingerprint on the monitor, and avoids reconverting an
+  unchanged chart on each detection poll.
+- **Bounded lag recovery.** A large backlog keeps up to the newest 256 overdue
+  actions without splitting timestamp batches, releases skipped hold tails, and keeps future
+  notes and ongoing holds. The precision busy-spin has a hard cap too.
 - **Full listener cleanup.** Every listener, timer and observer is registered
   through a disposer list and removed on `uninstall()` — no stale handlers after a
   SPA transition.
+
+A browser cannot send input while its main thread is blocked. Notes whose timing
+windows expire during a spike may still miss, and the game can still fail the
+play; recovery is for the notes that remain, not a guarantee of a perfect score.
 
 ## Debugging
 
@@ -633,7 +638,8 @@ Site state: PLAY
 and when. `Jitter` is *measured* scheduling error — how far the chart clock had
 travelled past the target when the action fired — not added variation. `dup` counts
 suppressed duplicate presses and `fail` counts dispatch failures; both should stay
-at zero.
+at zero. Scheduler `dropped` counts overdue **actions** skipped during recovery,
+not notes or judgements.
 
 The same data is available programmatically, which is usually faster than reading
 a panel:
@@ -658,8 +664,9 @@ cosmetic bug: it drains HP, breaks the run, and persists into the next screen.
    *between* notes would otherwise go unnoticed with a hold still down. It covers
    `RUNNING`, `PAUSED` and `READY` — a play can fail after the last action, while
    the site transitions to its results screen.
-3. **A 500ms watchdog** cross-checks how long each column has been held against
-   the chart clock and force-releases past a 20s timeout.
+3. **A 500ms watchdog** checks held keys against the chart clock and queued
+   releases. Legitimate long holds remain down; a delayed release gets a recovery
+   cycle after a stall. Genuinely stuck keys still trigger a safe stop.
 4. **Lifecycle listeners.** `visibilitychange`, `pagehide`, `beforeunload` and
    `blur` all release keys. A backgrounded tab gets throttled timers, which would
    wreck scheduling, so hiding the tab safely stops playback rather than firing late.
@@ -739,6 +746,14 @@ musical correction), **browser scheduling** (a backgrounded or heavily loaded ta
 gets throttled timers — keep the tab focused), and **humanization** (if it is on,
 timing is *deliberately* imperfect; turn it off to confirm). `Jitter` in the debug
 snapshot separates scheduler error from all of these.
+
+### Lag spikes
+
+Keep the tab visible and reduce other browser or game load. Keyfall catches up
+when execution resumes, but cannot retroactively hit a note whose window passed
+during a main-thread freeze. A large overrun reports skipped actions in
+`Keyfall.diagnostics().scheduler.dropped`; future notes remain queued unless
+the game itself fails or a safety condition stops the run.
 
 ### Keys become stuck
 

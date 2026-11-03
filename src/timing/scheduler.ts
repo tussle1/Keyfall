@@ -14,11 +14,12 @@ import { lowerBound } from "../util/helpers";
  *
  *   1. samples the clock (so the caller can refit its model)
  *   2. flushes anything already overdue (catch-up after a stall)
- *   3. arms a precise timer for the next batch inside the lookahead window
+ *   3. arms or retargets a precise timer for the next batch
  *
- * Armed timers wait until `spinThreshold` ms before the target, then busy-wait
- * the final stretch against `performance.now()` for sub-millisecond placement.
- * The busy-wait is bounded (a few ms) so it costs far less than a missed note.
+ * Timers chain to the next batch without waiting for another animation frame,
+ * and periodically recheck predictions across longer gaps. Near a deadline,
+ * they busy-wait at most `spinThreshold` ms against `performance.now()` for
+ * sub-millisecond placement. The busy-wait is bounded to a few ms.
  *
  * Batching: actions sharing an identical timestamp are fired from a single
  * timer in timeline order, which is what preserves same-frame simultaneous
@@ -33,7 +34,7 @@ export interface SchedulerHooks {
   /** Fire one batch of same-timestamp actions, in order. */
   fire: (actions: InputAction[], firedAtHost: number, targetChartTime: number) => void;
   /**
-   * Called once per frame so the caller can sample its clock model.
+   * Called at start/resume and on each frame to sample the clock model.
    *
    * Returning a number asks the scheduler to resync its cursor to that chart
    * time. This is how a seek is distinguished from a frame stall: only the
@@ -44,8 +45,8 @@ export interface SchedulerHooks {
   sample?: (host: number, chart: number) => number | void;
   /** Diagnostics / debug log. Must not throw. */
   log?: (message: string, data?: unknown) => void;
-  /** Called when the scheduler drops notes it could not play in time. */
-  onOverrun?: (droppedCount: number, atChartTime: number) => void;
+  /** Called when old overdue actions are skipped to bound catch-up work. */
+  onOverrun?: (droppedCount: number, atChartTime: number, skipped: readonly InputAction[]) => void;
   /** Called when the final action has been fired. */
   onComplete?: () => void;
 }
@@ -276,6 +277,7 @@ export class Scheduler {
     this.paused = false;
     this.epoch++;
     this.scheduleFrame();
+    this.primeTimer();
     this.hooks.log?.(`scheduler started (${this.actions.length} actions)`);
   }
 
@@ -293,6 +295,7 @@ export class Scheduler {
     // Re-sync the cursor to wherever the chart actually is, so a pause that
     // lasted a while doesn't dump a burst of stale actions.
     this.rebase(this.hooks.nowChart());
+    this.primeTimer();
     this.hooks.log?.("scheduler resumed");
   }
 
@@ -342,6 +345,16 @@ export class Scheduler {
     return this.armedHandle === null ? 0 : 1;
   }
 
+  /** Next queued release for a held column, used only by the safety watchdog. */
+  nextReleaseAt(column: number): number | null {
+    if (!this.isRunning) return null;
+    for (let i = this.cursor; i < this.actions.length; i++) {
+      const action = this.actions[i];
+      if (action.column === column) return action.type === "up" ? this.dueTime(i) : null;
+    }
+    return null;
+  }
+
   getJitter(): { last: number; avg: number; samples: number } {
     return {
       last: this.lastJitter,
@@ -379,7 +392,34 @@ export class Scheduler {
     return this.actions[index].time + this.actionOffset;
   }
 
+  /** First action strictly after the current playhead, in O(log n). */
+  private afterDue(chartNow: number): number {
+    let lo = this.cursor;
+    let hi = this.actions.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (this.dueTime(mid) <= chartNow) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
   /* ----------------------------- internals ----------------------------- */
+
+  /** Prime the clock and arm asynchronously; the caller can finish starting first. */
+  private primeTimer(): void {
+    const hostNow = this.now();
+    const chartNow = this.hooks.nowChart();
+    const resyncTo = this.hooks.sample?.(hostNow, chartNow);
+    if (typeof resyncTo === "number" && Number.isFinite(resyncTo)) this.rebase(resyncTo);
+    this.armNext();
+  }
+
+  private armNext(): void {
+    if (!this.isRunning || this.armedHandle !== null || this.cursor >= this.actions.length) return;
+    const predictedHost = this.hooks.hostTimeFor(this.dueTime(this.cursor));
+    if (Number.isFinite(predictedHost)) this.armBatch(this.cursor, predictedHost);
+  }
 
   private scheduleFrame(): void {
     if (this.frameHandle !== null) return;
@@ -411,7 +451,13 @@ export class Scheduler {
     const token = ++this.armedToken;
     this.armedBatchIndex = batchIndex;
     this.armedHostTime = predictedHost;
-    const delay = Math.max(0, predictedHost - this.now() - this.opts.spinThreshold);
+    // Wake at least once per lookahead window even across long gaps. Besides
+    // tracking rate changes, this lets the timer chain keep working if frames
+    // are delayed while the browser can still run ordinary tasks.
+    const delay = Math.min(
+      Math.max(0, predictedHost - this.now() - this.opts.spinThreshold),
+      Math.max(16, this.opts.lookahead),
+    );
     this.armedHandle = this.opts.scheduleTask(() => {
       // Cancellation can race a callback already queued by the browser. Do not
       // let that stale callback clear or fire its replacement timer.
@@ -453,25 +499,31 @@ export class Scheduler {
     }
 
     // --- Catch-up: flush anything already due -------------------------
-    let flushed = 0;
+    // A long main-thread stall may leave hundreds of actions overdue. Bound
+    // the work, but skip only the oldest *overdue* actions — never the future
+    // remainder of the chart. Keep whole timestamp batches together.
+    const dueEnd = this.afterDue(chartNow);
+    if (dueEnd - this.cursor > MAX_CATCHUP_ACTIONS_PER_FRAME) {
+      const start = this.cursor;
+      let end = dueEnd - MAX_CATCHUP_ACTIONS_PER_FRAME;
+      while (end < dueEnd && this.dueTime(end) === this.dueTime(end - 1)) end++;
+      const skipped = this.actions.slice(start, end);
+      this.clearArmed();
+      this.cursor = end;
+      this.droppedCount += skipped.length;
+      const epoch = this.epoch;
+      this.hooks.onOverrun?.(skipped.length, chartNow, skipped);
+      if (!this.running || this.paused || this.epoch !== epoch) return;
+    }
+
     while (this.cursor < this.actions.length && this.dueTime(this.cursor) <= chartNow) {
       // Catch-up can beat an armed timer after a clock change or frame stall.
       // Cancel it before advancing so it cannot block the next batch.
       if (this.armedHandle !== null) this.clearArmed();
       const batch = this.takeBatchAtCursor();
-      // Only fire a bounded number of overdue actions. Beyond that the tab
-      // clearly stalled (or a seek happened) and firing them all would jam
-      // every column at once, so we drop and report instead.
-      if (flushed + batch.length > MAX_CATCHUP_ACTIONS_PER_FRAME) {
-        const dropped = this.actions.length - this.cursor;
-        this.cursor = this.actions.length;
-        this.droppedCount += dropped;
-        this.hooks.onOverrun?.(dropped, chartNow);
-        break;
-      }
+      const epoch = this.epoch;
       this.dispatch(batch, hostNow, chartNow, true);
-      flushed += batch.length;
-      if (!this.running || this.paused) return;
+      if (!this.running || this.paused || this.epoch !== epoch) return;
     }
 
     if (this.cursor >= this.actions.length) {
@@ -487,8 +539,7 @@ export class Scheduler {
       // predictions are rechecked when the current timer wakes up.
       this.clearArmed();
     }
-    if (this.armedHandle === null && Number.isFinite(predictedHost) &&
-        predictedHost - this.now() <= this.opts.lookahead) {
+    if (this.armedHandle === null && Number.isFinite(predictedHost)) {
       this.armBatch(this.cursor, predictedHost);
     }
 
@@ -518,6 +569,16 @@ export class Scheduler {
     // The next animation frame will retry or catch up once the clock recovers.
     if (!Number.isFinite(predictedHost)) return;
     const remaining = predictedHost - this.now();
+
+    // A timer can be the first callback after a main-thread stall, before the
+    // next animation frame. Recover the backlog using the current clock rather
+    // than blindly firing one obsolete batch from the old deadline.
+    if (remaining < -8) {
+      if (this.hooks.nowChart() >= target) this.tick(this.now());
+      // If the site's frame-based clock has not caught up yet, let the next
+      // animation frame resample it instead of spinning on an expired timer.
+      return;
+    }
 
     // Not due yet (clock model is conservative): re-arm for the remainder.
     if (remaining > this.opts.spinThreshold) {
@@ -552,6 +613,11 @@ export class Scheduler {
 
     const batch = this.takeBatchAtCursor();
     this.dispatch(batch, this.now(), this.hooks.nowChart(), false);
+    if (epoch !== this.epoch || !this.running || this.paused || this.cursor >= this.actions.length) return;
+
+    // A slow/missing animation frame must not delay the following notes when
+    // the event loop is otherwise available. Only one timer is armed at once.
+    this.armNext();
   }
 
   private dispatch(

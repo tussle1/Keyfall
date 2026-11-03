@@ -95,8 +95,12 @@ Ashtonk!mania does **not** store a separate duplicate hold-head tap, so the
 timeline's WOM hold-head pre-pass is harmless. `chartSignature` hashes the note
 layout plus `s.rec.hash`, key count, mods, seed, practice loop points and the
 identity of `s.engine`; this makes `random` retries and practice seeks rebuild
-the timeline even when note count and start/end times are unchanged. The mutable
-playback rate is intentionally *not* part of chart identity.
+the timeline even when note count and start/end times are unchanged. A cheaper
+`chartRevision` tracks session, engine, note-array identity and length: it is
+checked for every dispatched batch, while the full fingerprint is checked by
+the 100ms monitor to catch in-place changes. Unchanged detection polls avoid
+reconverting the chart. The mutable playback rate is intentionally *not* part
+of chart identity.
 
 ## 4. Chart clock
 
@@ -230,9 +234,12 @@ separate, local checkout of the real game. It generates local 4K and 18K charts
 with chords and holds, checks pre-game manual arming, opt-in auto-start, custom
 bindings, normal/Practice/daily-configured/multiplayer-configured play, Wind
 Up/Down, Adaptive Speed, a Practice seek during a hold, and a trusted emergency
-hotkey during an 18K hold. External requests are blocked. Daily and multiplayer
-are offline configuration fixtures, **not** connected sessions; no server
-scoring is tested.
+hotkey during an 18K hold. A short main-thread freeze checks that a chord still
+inside the hit window is recovered. Another blocks the thread for 2.4 seconds
+on a dense 4K No Fail chart, checks that skipped and ongoing holds reconcile,
+and verifies all four later notes are hit. Misses during the long freeze are
+expected. External requests are blocked. Daily and multiplayer are offline configuration
+fixtures, **not** connected sessions; no server scoring is tested.
 
 With Node 22.18+, an existing Chromium/Chrome, and a checkout of the game:
 

@@ -136,6 +136,16 @@ export class InputManager {
     return (this.columnCodes.get(column)?.size ?? 0) > 0;
   }
 
+  /** Scheduled tap keyup, if a browser stall has delayed its deferral timer. */
+  pendingTapReleaseAt(column: number): number | null {
+    for (const entry of this.held.values()) {
+      if (entry.column === column && entry.releaseHandle !== null) {
+        return entry.releaseAtChart + this.minTapHoldMs;
+      }
+    }
+    return null;
+  }
+
   /**
    * Chart time at which each currently-held key was pressed.
    *
@@ -213,6 +223,24 @@ export class InputManager {
 
     // chartTime is informational here; per-action times drive the logic.
     void chartTime;
+  }
+
+  /**
+   * Reconcile actions skipped after a large stall. A held key whose scheduled
+   * release was skipped must be released now; an unrelated hold whose tail is
+   * still in the future must remain down. Skipped presses are never replayed.
+   */
+  releaseSkipped(actions: readonly InputAction[], chartTime: number): number {
+    let released = 0;
+    for (const action of actions) {
+      if (this.held.size === 0) break;
+      if (action.type !== "up") continue;
+      const entry = this.held.get(action.code);
+      if (!entry || entry.column !== action.column) continue;
+      this.keyUp(entry.code, entry.column, chartTime);
+      if (!this.held.has(entry.code)) released++;
+    }
+    return released;
   }
 
   /**

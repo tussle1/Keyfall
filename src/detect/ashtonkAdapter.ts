@@ -113,9 +113,9 @@ interface AshtonkApi extends UnknownRecord {
 /** Cached adapter per window, so detection polls see one stable game object. */
 const ADAPTERS = new WeakMap<Window, GameLike>();
 
-/** Stable identity for a prepared `s.engine`, which practice seeks replace. */
-const ENGINE_IDS = new WeakMap<object, number>();
-let nextEngineId = 1;
+/** Stable identities for sessions, prepared engines and their note arrays. */
+const OBJECT_IDS = new WeakMap<object, number>();
+let nextObjectId = 1;
 
 /** Recognise the site's exported API by shape, not by a constructor name. */
 export function readAshtonkApi(win: Window): AshtonkApi | null {
@@ -412,14 +412,30 @@ function readChartTime(
   return songTime - (offset + latency) * rate;
 }
 
-function engineId(engine: unknown): number {
-  if (!isRecord(engine)) return 0;
-  let id = ENGINE_IDS.get(engine);
+function objectId(value: unknown): number {
+  if (!isRecord(value)) return 0;
+  let id = OBJECT_IDS.get(value);
   if (id === undefined) {
-    id = nextEngineId++;
-    ENGINE_IDS.set(engine, id);
+    id = nextObjectId++;
+    OBJECT_IDS.set(value, id);
   }
   return id;
+}
+
+/**
+ * O(1) in chart length. Prepared Ashtonk note layouts remain stable during
+ * play; retries/seeks replace their session, engine or array. This revision
+ * catches those replacements before the next dispatch. The slower structural
+ * signature below still detects in-place edits on the 100ms state monitor.
+ */
+function readChartRevision(s: AshtonkSession | null): string {
+  const notes = activeNotes(s);
+  return [
+    objectId(s), objectId(s?.engine), objectId(notes), notes.length,
+    s?.rec?.hash ?? s?.rec?.id ?? "ashtonk", s?.keys ?? 0,
+    Array.isArray(s?.mods) ? s.mods.join(",") : "", s?.seed ?? 0,
+    s?.loopA ?? "", s?.loopB ?? "",
+  ].join("|");
 }
 
 /**
@@ -438,6 +454,8 @@ function readChartSignature(s: AshtonkSession | null): string {
     layoutHash = Math.imul(layoutHash, 16777619);
     layoutHash ^= Math.trunc(numberOr(note.col, 0));
     layoutHash = Math.imul(layoutHash, 16777619);
+    layoutHash ^= note.isLN === false ? 0 : 1;
+    layoutHash = Math.imul(layoutHash, 16777619);
   }
   const modList = s?.mods;
   const mods = Array.isArray(modList) ? modList.join(",") : "";
@@ -451,7 +469,7 @@ function readChartSignature(s: AshtonkSession | null): string {
       // not chart identity and must not restart the timeline.
       s?.loopA ?? "",
       s?.loopB ?? "",
-      engineId(s?.engine),
+      objectId(s?.engine),
       notes.length,
       (layoutHash >>> 0).toString(36),
     ].join("|"),
@@ -586,6 +604,14 @@ function createAdapter(win: Window): GameLike {
         artist: typeof rec?.artist === "string" ? rec.artist : undefined,
         version: typeof rec?.version === "string" ? rec.version : undefined,
       };
+    },
+
+    get hasHitObjects(): boolean {
+      return activeNotes(liveContext(win).s).length > 0;
+    },
+
+    get chartRevision(): string {
+      return readChartRevision(liveContext(win).s);
     },
 
     get chartSignature(): string {

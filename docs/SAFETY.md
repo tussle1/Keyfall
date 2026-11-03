@@ -106,9 +106,11 @@ breaks the run, and can persist into the next screen. Defences, in layers:
    path, because a failure between notes would otherwise go unnoticed with a
    hold still down. It covers `RUNNING`, `PAUSED` and `READY`: a play can fail
    after the last action, while the site transitions to its results screen.
-3. **A 500ms guards watchdog** (`engine/guards.ts`) cross-checks how long each
-   column has been held against the chart clock, and force-releases past
-   `STUCK_KEY_TIMEOUT`.
+3. **A 500ms guards watchdog** (`engine/guards.ts`) checks held keys against the
+   chart clock and queued releases. A genuine long hold with a future tail is not
+   treated as stuck. An overdue queued tail gets one cycle to recover if the
+   watchdog wakes first after a stall; unrecovered or unscheduled stuck keys still
+   trigger a release and safe stop.
 4. **Lifecycle listeners**: `visibilitychange`, `pagehide`, `beforeunload` and
    `blur` all release keys. A hidden tab gets throttled timers, so visibility
    loss triggers a safe stop rather than continuing to fire late.
@@ -119,10 +121,11 @@ breaks the run, and can persist into the next screen. Defences, in layers:
 6. **A stuck-key release even without a recorded press.** If the site believes a
    column is down and we have no record of pressing it, we dispatch the release
    anyway. A spurious `keyup` is harmless; a missing one is not.
-7. **Bounded everything.** The catch-up loop caps at
-   `MAX_CATCHUP_ACTIONS_PER_FRAME` and reports an overrun rather than jamming
-   every column at once. The precision spin-wait has both an absolute deadline
-   and an iteration cap, so a bad clock prediction cannot freeze the tab.
+7. **Bounded everything.** Catch-up keeps at most
+   `MAX_CATCHUP_ACTIONS_PER_FRAME` overdue actions, skipping older whole batches
+   while preserving future notes. Skipped hold releases are reconciled without
+   interrupting holds that are still active. The precision spin-wait has both an
+   absolute deadline and an iteration cap, so a bad clock cannot freeze the tab.
 8. **Errors never escape.** Every strategy, emitter subscriber, scheduled task
    and dispatch is wrapped; a throw degrades to a log line and a safe stop with
    `Autoplay stopped safely.`
@@ -137,6 +140,7 @@ breaks the run, and can persist into the next screen. Defences, in layers:
 | A replay is playing | Refuses to start; the site's `ReplayPlayer` / `s.feed` already drives input |
 | Ashtonk!mania normal, ranked, multiplayer or daily play | The game may submit the play; server acceptance is untested. Do not claim an automated leaderboard score |
 | Ashtonk!mania changing playback speed | The scheduler retargets using the current judgement clock; abrupt changes or a blocked main thread can still cause timing errors |
+| Main-thread lag spike | The scheduler resumes with the remaining chart and reconciles skipped hold releases. Notes whose judgement windows passed while JS was blocked cannot be recovered; the game may also fail the play |
 | Ashtonk!mania high-key layout collides with `G`/`B`/`X`/`Z` hotkeys | Collision warning is surfaced; rebind the hotkeys in More! → Input |
 | A prepared chart closes, is replaced or has an incompatible feed before starting | Its pending manual start is canceled; auto-start can arm the next valid chart only if enabled |
 | The loader returns or the live chart changes during a run | Keys are released; stale chart input is blocked while the engine pauses or rebuilds |

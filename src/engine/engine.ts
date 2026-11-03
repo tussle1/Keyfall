@@ -137,6 +137,7 @@ export class Engine {
 
   private lastError = "";
   private lastChartSignature = "";
+  private lastChartRevision: string | null = null;
 
   constructor(options: EngineOptions) {
     this.settingsManager = options.settings;
@@ -159,7 +160,7 @@ export class Engine {
         fire: (actions, hostNow, targetChart) => this.onFire(actions, hostNow, targetChart),
         sample: (host, chart) => this.onClockSample(host, chart),
         log: (message) => this.log("info", message),
-        onOverrun: (dropped, at) => this.onOverrun(dropped, at),
+        onOverrun: (dropped, at, skipped) => this.onOverrun(dropped, at, skipped),
         onComplete: () => this.onChartComplete(),
       },
       {
@@ -181,6 +182,8 @@ export class Engine {
         chartTime: () => (Number.isFinite(this.chartTime()) ? this.chartTime() : null),
         heldColumns: () => this.input.heldColumns,
         heldSince: () => this.heldSinceChart(),
+        pendingReleaseAt: (column) =>
+          this.input.pendingTapReleaseAt(column) ?? this.scheduler.nextReleaseAt(column),
         log: (message) => this.log("info", message),
       },
       { win: this.win },
@@ -559,6 +562,7 @@ export class Engine {
         this.timeline = null;
         this.keyMapping = null;
         this.lastChartSignature = "";
+        this.lastChartRevision = null;
         this.setPhase("DETECTING");
         this.emitter.emit("lost", { reason });
         this.log("info", reason);
@@ -568,6 +572,19 @@ export class Engine {
 
     const isNewInstance = acquired.game !== this.game;
     const settings = this.settingsManager.all;
+    // Detection runs every 700ms. Adapters with a cheap revision and full
+    // signature can verify an unchanged chart without converting and sorting
+    // it again. Generic sites must still rebuild their fallback fingerprint.
+    if (!isNewInstance && this.lastChartRevision !== null && this.chart && this.keyMapping &&
+        this.phase !== "DETECTING" && this.isGameAlive()) {
+      const revision = acquired.game.chartRevision;
+      const signature = acquired.game.chartSignature;
+      if (revision === this.lastChartRevision && typeof signature === "string" &&
+          signature.length > 0 && signature === this.lastChartSignature) {
+        if (this.phase === "ERROR") this.setPhase("READY");
+        return;
+      }
+    }
     const result: DetectionResult = buildContextFromGame(acquired.game, settings, acquired.via);
 
     if (!result.ok) {
@@ -586,6 +603,7 @@ export class Engine {
         this.timeline = null;
         this.keyMapping = null;
         this.lastChartSignature = "";
+        this.lastChartRevision = null;
         this.setPhase("ERROR", result.reason ?? "Detection incomplete");
       }
       this.log("warn", result.reason ?? "Detection incomplete");
@@ -595,8 +613,11 @@ export class Engine {
     const chart = result.chart!;
     const mapping = result.keyMapping!;
     const signatureChanged = chart.signature !== this.lastChartSignature;
+    const revision = acquired.game.chartRevision;
+    const revisionChanged = this.lastChartRevision !== null && typeof revision === "string" &&
+      revision !== this.lastChartRevision;
 
-    if (!isNewInstance && !signatureChanged && this.phase !== "DETECTING") {
+    if (!isNewInstance && !signatureChanged && !revisionChanged && this.phase !== "DETECTING") {
       // Same game, same chart: nothing to do. This is the cheap path that runs
       // on every poll, so it must not re-parse anything.
       this.game = acquired.game;
@@ -625,6 +646,7 @@ export class Engine {
     this.keyMapping = mapping;
     this.secondaryCodes = buildSecondaryMapping(acquired.game, chart.keyCount);
     this.lastChartSignature = chart.signature;
+    this.lastChartRevision = typeof revision === "string" && revision.length > 0 ? revision : null;
     this.lastError = "";
     this.clock.hardReset();
 
@@ -813,6 +835,13 @@ export class Engine {
     if (!discontinuity) return;
 
     this.log("info", `clock discontinuity at ${chart.toFixed(1)}ms — resyncing`);
+    if (this.phase === "RUNNING" && this.timeline) {
+      // A seek can jump past the tail of a held key. Releasing only keys whose
+      // next action is no longer their tail prevents both stuck keys and a
+      // suppressed press on the same column, while preserving ongoing holds.
+      const released = this.input.reconcileHeld(this.timeline.actions, chart, this.scheduler.actionTimeOffset);
+      if (released) this.log("info", `released ${released} key(s) after clock resync`);
+    }
     // Resync even while paused, so a seek during pause leaves the cursor in the
     // right place for the eventual resume.
     return chart;
@@ -837,7 +866,7 @@ export class Engine {
     const game = this.game;
     // An adapter can notice a replaced engine between detection polls. Never
     // send an old chart's batch into the replacement; the monitor will rebind.
-    if (this.chartChanged()) {
+    if (this.chartChanged(true)) {
       this.pauseForSite();
       return;
     }
@@ -899,12 +928,13 @@ export class Engine {
     }
   }
 
-  private onOverrun(dropped: number, atChartTime: number): void {
+  private onOverrun(dropped: number, atChartTime: number, skipped: readonly InputAction[]): void {
+    const released = this.input.releaseSkipped(skipped, atChartTime);
     this.log(
       "warn",
-      `dropped ${dropped} action(s) at ${atChartTime.toFixed(0)}ms — the tab stalled or the playhead jumped`,
+      `skipped ${dropped} overdue action(s) after a stall at ${atChartTime.toFixed(0)}ms; ` +
+        `released ${released} key(s) and continued with the remaining chart`,
     );
-    this.input.releaseAll();
     this.maybeEmitStats();
   }
 
@@ -978,6 +1008,7 @@ export class Engine {
         this.timeline = null;
         this.keyMapping = null;
         this.lastChartSignature = "";
+        this.lastChartRevision = null;
         this.setPhase("DETECTING");
         this.emitter.emit("lost", { reason: "Gameplay closed" });
       } else {
@@ -1095,24 +1126,35 @@ export class Engine {
 
     // A site adapter's input conflict (e.g. a replay or Auto feed) is
     // terminal for this live session.
-    if (typeof game.unsupportedReason === "string" && game.unsupportedReason.length > 0) {
-      return false;
-    }
+    const unsupported = game.unsupportedReason;
+    if (typeof unsupported === "string" && unsupported.length > 0) return false;
 
     // FAIL is a real end-of-play state; treat the run as over.
     if (game.state === "FAIL") return false;
 
-    // If hit objects vanished, the instance was torn down mid-flight.
-    if (!Array.isArray(game.hitObjects) || game.hitObjects.length === 0) return false;
-
-    return true;
+    // Some adapters would allocate a whole converted chart on each getter read.
+    // Prefer their cheap presence probe, retaining the generic site's fallback.
+    const present = game.hasHitObjects;
+    if (typeof present === "boolean") return present;
+    const objects = game.hitObjects;
+    return Array.isArray(objects) && objects.length > 0;
   }
 
-  /** Whether an adapter's live chart identity differs from the parsed chart. */
-  private chartChanged(): boolean {
-    const signature = this.game?.chartSignature;
-    return !!this.lastChartSignature && typeof signature === "string" &&
-      signature.length > 0 && signature !== this.lastChartSignature;
+  /**
+   * Check cheap replacement identity on the firing path; the 100ms monitor
+   * also checks the full fingerprint for in-place mutations. Adapters without
+   * a revision keep the original full-signature behavior.
+   */
+  private chartChanged(fast = false): boolean {
+    const game = this.game;
+    if (!game || !this.lastChartSignature) return false;
+    const revision = game.chartRevision;
+    if (typeof revision === "string" && revision.length > 0 && this.lastChartRevision !== null) {
+      if (revision !== this.lastChartRevision) return true;
+      if (fast) return false;
+    }
+    const signature = game.chartSignature;
+    return typeof signature === "string" && signature.length > 0 && signature !== this.lastChartSignature;
   }
 
   /** Suspend scheduling and release keys while the site cannot accept input. */

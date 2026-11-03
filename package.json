@@ -1,6 +1,6 @@
 {
   "name": "keyfall",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "private": true,
   "type": "module",
   "description": "Keyfall \u2014 its own keyboard-event autoplay for Web osu!mania and Ashtonk!mania. Reuses one scheduler, timeline, humanizer and synthetic DOM input path; never uses either site's built-in Autoplay/Auto mod.",

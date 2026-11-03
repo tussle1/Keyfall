@@ -213,6 +213,37 @@ describe("InputManager", () => {
     input.dispose();
   });
 
+  it("releases skipped hold tails after a stall without breaking holds still in progress", () => {
+    const game = installFakeGame(["KeyD", "KeyF", "KeyJ", "KeyK"]);
+    const input = new InputManager({
+      target: env.document,
+      eventCtor: StubKeyboardEvent as any,
+      now: () => env.now(),
+      scheduleTask: (fn, ms) => env.window.setTimeout(fn, ms),
+      cancelTask: (h) => env.window.clearTimeout(h),
+    });
+    input.setMapping(mapping(["KeyD", "KeyF", "KeyJ", "KeyK"]));
+    input.applyActions([
+      action(1000, "down", 0, "KeyD", 300), // its tail falls within the skipped range
+      action(1000, "down", 1, "KeyF", 2000), // its tail is still ahead
+      action(1000, "down", 2, "KeyJ"), action(1000, "up", 2, "KeyJ"), // deferred tap
+    ], 1000);
+    const released = input.releaseSkipped([
+      action(1100, "down", 3, "KeyK"), // skipped presses must never be replayed
+      action(1300, "up", 0, "KeyD", 300),
+      action(1300, "up", 0, "KeyD", 300), // duplicate release is harmless
+      action(1400, "up", 2, "KeyJ"),
+    ], 1500);
+    assert.equal(released, 2);
+    assert.deepEqual(game.pressedColumns, [false, true, false, false]);
+    assert.deepEqual(input.heldColumns, [1]);
+    env.advance(20);
+    assert.deepEqual(game.pressedColumns, [false, true, false, false], "deferred release timer was canceled");
+    input.applyActions([action(3000, "up", 1, "KeyF", 2000)], 3000);
+    assert.deepEqual(game.pressedColumns, [false, false, false, false]);
+    input.dispose();
+  });
+
   it("preserves valid holds and deferred taps while releasing keys skipped by a timeline change", () => {
     const game = installFakeGame(["KeyD", "KeyF", "KeyJ", "KeyK"]);
     const input = new InputManager({
@@ -389,6 +420,22 @@ describe("InputManager", () => {
 
     input.release(0, 1010);
     assert.equal(input.heldCount, 0);
+    input.dispose();
+  });
+
+  it("exposes a delayed tap release to the watchdog until its timer runs", () => {
+    installFakeGame(["KeyD", "KeyF"]);
+    const input = new InputManager({
+      target: env.document, eventCtor: StubKeyboardEvent as any,
+      scheduleTask: (fn, ms) => env.window.setTimeout(fn, ms),
+      cancelTask: (id) => env.window.clearTimeout(id),
+    });
+    input.setMapping(mapping(["KeyD", "KeyF"]));
+    input.applyActions([action(1000, "down", 0, "KeyD"), action(1000, "up", 0, "KeyD")], 1000);
+    assert.equal(input.pendingTapReleaseAt(0), 1012);
+    assert.equal(input.pendingTapReleaseAt(1), null);
+    env.advance(12);
+    assert.equal(input.pendingTapReleaseAt(0), null);
     input.dispose();
   });
 

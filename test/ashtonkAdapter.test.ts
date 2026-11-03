@@ -420,6 +420,60 @@ describe("Ashtonk!mania chart/clock/keybind adapter", () => {
     assert.notEqual(game.chartSignature!, seeked);
   });
 
+  it("provides a cheap chart revision that changes on engine, array and session replacement", () => {
+    const fake = makeAshtonk();
+    const game = acquireAshtonkGame(env.window)!;
+    assert.equal(game.hasHitObjects, true);
+    const first = game.chartRevision;
+    assert.ok(first);
+    fake.changeRate(1.5);
+    assert.equal(game.chartRevision, first, "playback rate is not chart identity");
+    fake.s.engine.notes = fake.chartNotes.slice();
+    const newArray = game.chartRevision;
+    assert.notEqual(newArray, first);
+    fake.s.engine = { notes: fake.s.engine.notes, score: fake.score };
+    assert.notEqual(game.chartRevision, newArray);
+    fake.s.engine.notes = [];
+    assert.equal(game.hasHitObjects, false);
+  });
+
+  it("avoids converting or hashing the full chart for individual notes and unchanged detection polls", () => {
+    const fake = makeAshtonk({ chartNotes: [
+      { col: 0, time: 960, end: 960, isLN: false },
+      { col: 1, time: 1800, end: 1800, isLN: false },
+    ] });
+    const game = acquireAshtonkGame(env.window)!;
+    const hitGetter = Object.getOwnPropertyDescriptor(game, "hitObjects")!.get!;
+    const sigGetter = Object.getOwnPropertyDescriptor(game, "chartSignature")!.get!;
+    let conversions = 0;
+    let hashes = 0;
+    Object.defineProperty(game, "hitObjects", { configurable: true, get() { conversions++; return hitGetter.call(game); } });
+    Object.defineProperty(game, "chartSignature", { configurable: true, get() { hashes++; return sigGetter.call(game); } });
+    const engine = engineWith(settings());
+    engine.init(); engine.start();
+    while (env.now() < 920) { env.advance(8); env.frame(); }
+    conversions = 0; hashes = 0;
+    while (env.now() < 990) { env.advance(2); env.frame(); }
+    assert.deepEqual(fake.judged.filter((event) => event.type === "down").map((event) => event.column), [0]);
+    assert.equal(conversions, 0, "note dispatch must not convert the chart");
+    assert.equal(hashes, 0, "note dispatch must not fingerprint the full chart");
+    while (env.now() < 1500) { env.advance(8); env.frame(); }
+    assert.equal(conversions, 0, "an unchanged detection poll must not rebuild the chart");
+    assert.ok(hashes > 0, "the slow monitor must still verify the structural fingerprint");
+  });
+
+  it("still detects an in-place chart layout change on the next state-monitor check", () => {
+    const fake = makeAshtonk({ chartNotes: [{ col: 0, time: 1200, end: 1200, isLN: false }] });
+    const engine = engineWith(settings());
+    engine.init(); engine.start();
+    while (env.now() < 920) { env.advance(8); env.frame(); }
+    const first = engine.currentChart?.signature;
+    fake.chartNotes[0].col = 2;
+    while (env.now() < 1300) { env.advance(8); env.frame(); }
+    assert.notEqual(engine.currentChart?.signature, first);
+    assert.deepEqual(fake.judged.filter((event) => event.type === "down").map((event) => event.column), [2]);
+  });
+
   it("exposes Ashtonk score, combo, accuracy and judgement counts to the existing stats reader", () => {
     const fake = makeAshtonk();
     fake.score.counts = [10, 2, 1, 0, 0, 0];

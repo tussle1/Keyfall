@@ -373,6 +373,8 @@ export interface StubEnvironment {
   advance: (ms: number) => void;
   /** Run one animation frame callback. */
   frame: (ms?: number) => void;
+  /** Advance host time without delivering callbacks (a blocked main thread). */
+  stall: (ms: number) => void;
   now: () => number;
   globalsInstalled: () => void;
   globalsRemoved: () => void;
@@ -515,6 +517,7 @@ export function installDom(options: { start?: number } = {}): StubEnvironment {
     document,
     advance,
     frame,
+    stall: (ms) => { clock += ms; },
     now: () => clock,
     globalsInstalled() {
       for (const [name, value] of globals) {

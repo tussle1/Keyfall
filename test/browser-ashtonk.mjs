@@ -95,10 +95,25 @@ try {
       }
       return `osu file format v14\n\n[General]\nAudioFilename: audio.wav\nMode: 3\n\n[Metadata]\nTitle:Keyfall Fixture\nArtist:Local Test\nCreator:Keyfall\nVersion:${keys}K Test\nBeatmapSetID:-1\n\n[Difficulty]\nHPDrainRate:3\nCircleSize:${keys}\nOverallDifficulty:5\nSliderMultiplier:1.4\nSliderTickRate:1\n\n[Events]\n\n[TimingPoints]\n0,500,4,2,0,100,1,0\n\n[HitObjects]\n${objects.join("\n")}\n`;
     };
+    // Dense enough that a real blocked-thread stall leaves >256 overdue
+    // actions. One hold ends inside the stall; the other extends past it.
+    const lagText = () => {
+      const objects = ["64,192,7000,128,0,7800:0:0:0:0:", "192,192,7000,128,0,11000:0:0:0:0:"];
+      for (let time = 7500; time <= 9000; time += 10) {
+        for (const x of [320, 448]) objects.push(`${x},192,${time},1,0,0:0:0:0:`);
+      }
+      for (const x of [64, 192, 320, 448]) objects.push(`${x},192,11500,1,0,0:0:0:0:`);
+      return `osu file format v14\n\n[General]\nAudioFilename: audio.wav\nMode: 3\n\n[Metadata]\nTitle:Keyfall Fixture\nArtist:Local Test\nCreator:Keyfall\nVersion:4K Lag\nBeatmapSetID:-1\n\n[Difficulty]\nHPDrainRate:3\nCircleSize:4\nOverallDifficulty:5\nSliderMultiplier:1.4\nSliderTickRate:1\n\n[Events]\n\n[TimingPoints]\n0,500,4,2,0,100,1,0\n\n[HitObjects]\n${objects.join("\n")}\n`;
+    };
     const encoder = new TextEncoder();
     const files = [
       { name: "audio.wav", data: audio },
       ...[4, 18].map((keys) => ({ name: `test-${keys}k.osu`, data: encoder.encode(text(keys)) })),
+      { name: "test-short-lag-4k.osu", data: encoder.encode(
+        text(4).replace("Version:4K Test", "Version:4K Short Lag") +
+        [64, 192, 320, 448].map((x) => `${x},192,9200,1,0,0:0:0:0:`).join("\n") + "\n",
+      ) },
+      { name: "test-lag-4k.osu", data: encoder.encode(lagText()) },
     ];
     const result = await M.App.importFiles([new File([writeZip(files)], "keyfall-test.osz")]);
     if (result.errors.length) throw new Error(`Could not import local chart: ${JSON.stringify(result.errors)}`);
@@ -135,10 +150,15 @@ try {
     // A small early offset causes real Adaptive Speed feedback without leaving
     // the top judgement window, so the mod actually changes its rate.
     { name: "Adaptive Speed 4K", keys: 4, mods: ["AS"], offset: -12 },
+    { name: "short stall / notes still in judgement window", keys: 4, version: "4K Short Lag", mods: [], lagSmall: true },
+    { name: "blocked main thread / dense backlog and holds", keys: 4, version: "4K Lag", mods: ["NF"], lag: true },
     { name: "normal 18K", keys: 18, mods: [] },
     { name: "emergency during 18K hold", keys: 18, mods: [], emergency: true },
   ];
-  for (const test of cases) {
+  const filter = process.env.KEYFALL_ASHTONK_CASE;
+  const selected = filter ? cases.filter((test) => test.name.includes(filter)) : cases;
+  if (selected.length === 0) throw new Error(`No Ashtonk browser case matches ${filter}`);
+  for (const test of selected) {
     await page.evaluate(async (test) => {
       const M = AshtonkMania;
       Keyfall.settings.set("general.autoStart", !test.manual);
@@ -153,12 +173,93 @@ try {
       if (M.GameplayScreen.s) M.GameplayScreen.quit();
       clearInterval(window.__rateTimer);
       window.__play = null; window.__rates = []; window.__detections = 0;
-      const map = [...M.BeatmapManager.maps.values()].find((entry) => entry.version === `${test.keys}K Test`);
+      const map = [...M.BeatmapManager.maps.values()].find((entry) => entry.version === (test.version ?? `${test.keys}K Test`));
       M.Game.launch({
         mapId: map.id, mods: test.mods, mode: test.practice ? "practice" : "play", quick: true,
         daily: test.daily, mp: test.mp ? { startAt: performance.now() + 1000, players: [], rp: true } : undefined,
       });
     }, test);
+    if (test.lagSmall) {
+      await page.waitForFunction(() => window.__play && Keyfall.phase === "RUNNING" &&
+        AshtonkMania.GameplayScreen.inputTime({ timeStamp: performance.now() }) >= 8000,
+      null, { timeout: 30_000 });
+      const blocked = await page.evaluate(() => new Promise((resolve) => {
+        const check = () => {
+          const clock = () => AshtonkMania.GameplayScreen.inputTime({ timeStamp: performance.now() });
+          const before = clock();
+          if (before < 8320) { requestAnimationFrame(check); return; }
+          const start = performance.now();
+          while (performance.now() - start < 120) { /* a short main-thread freeze */ }
+          resolve({ before, after: clock() });
+        };
+        check();
+      }));
+      assert.ok(blocked.before < 8400 && blocked.after > 8400 && blocked.after < 8500,
+        `${test.name}: freeze must end inside the hit window: ${JSON.stringify(blocked)}`);
+      await page.waitForFunction(() => {
+        const notes = window.__play?.engine.notes.filter((note) => note.time === 9200);
+        return notes?.length === 4 && notes.every((note) => note.headJ >= 0) && !window.__play.held.some(Boolean);
+      }, null, { timeout: 15_000 });
+      const result = await page.evaluate(() => ({
+        delayed: window.__play.engine.notes.filter((note) => note.time === 8400).map((note) => note.headJ),
+        later: window.__play.engine.notes.filter((note) => note.time === 9200).map((note) => note.headJ),
+        diag: Keyfall.diagnostics(),
+      }));
+      assert.equal(result.delayed.length, 4, test.name);
+      assert.ok(result.delayed.every((judgement) => judgement >= 0 && judgement < 5),
+        `${test.name}: recoverable chord must not miss: ${JSON.stringify(result.delayed)}`);
+      assert.deepEqual(result.later, [0, 0, 0, 0], `${test.name}: later chord must still play`);
+      assert.equal(result.diag.scheduler.dropped, 0, test.name);
+      assert.deepEqual(result.diag.input.heldColumns, [], test.name);
+      console.log(`PASS ${test.name}: recovered all 4 delayed notes and hit all 4 later notes`);
+      await page.evaluate(() => AshtonkMania.GameplayScreen.quit());
+      await page.waitForFunction(() => AshtonkMania.Screens.currentName !== "gameplay", null, { timeout: 10_000 });
+      await page.waitForTimeout(800);
+      continue;
+    }
+    if (test.lag) {
+      await page.waitForFunction(() => {
+        const play = window.__play;
+        return play?.held[0] && play?.held[1] && Keyfall.phase === "RUNNING";
+      }, null, { timeout: 30_000 });
+      const blocked = await page.evaluate(() => {
+        const before = AshtonkMania.GameplayScreen.inputTime({ timeStamp: performance.now() });
+        const start = performance.now();
+        while (performance.now() - start < 2400) { /* block browser JS; audio keeps advancing */ }
+        const after = AshtonkMania.GameplayScreen.inputTime({ timeStamp: performance.now() });
+        return { before, after, held: [...window.__play.held] };
+      });
+      assert.ok(blocked.after - blocked.before > 2000, `${test.name}: audio clock must advance during the stall`);
+      await page.waitForFunction(() => Keyfall.diagnostics().scheduler.dropped > 0, null, { timeout: 10_000 });
+      const recovered = await page.evaluate(() => ({
+        time: AshtonkMania.GameplayScreen.inputTime({ timeStamp: performance.now() }),
+        held: [...window.__play.held], diag: Keyfall.diagnostics(),
+      }));
+      assert.ok(recovered.time < 10900, `${test.name}: recovery needs to occur before the second tail: ${recovered.time}`);
+      assert.equal(recovered.diag.phase, "RUNNING", test.name);
+      assert.ok(recovered.diag.scheduler.dropped > 0, test.name);
+      assert.equal(recovered.held[0], false, `${test.name}: expired hold must be released`);
+      assert.equal(recovered.held[1], true, `${test.name}: future hold must remain down`);
+      await page.waitForFunction(() => {
+        const notes = window.__play?.engine.notes.filter((note) => note.time === 11500);
+        return notes?.length === 4 && notes.every((note) => note.headJ >= 0);
+      }, null, { timeout: 15_000 });
+      const result = await page.evaluate(() => ({
+        later: window.__play.engine.notes.filter((note) => note.time === 11500)
+          .map((note) => ({ col: note.col, judgement: note.headJ })),
+        held: [...window.__play.held], diag: Keyfall.diagnostics(),
+        misses: window.__play.engine.score.counts[5],
+      }));
+      assert.deepEqual(result.later.map((note) => note.judgement), [0, 0, 0, 0], `${test.name}: later notes: ${JSON.stringify(result.later)}`);
+      assert.ok(result.misses > 0, `${test.name}: skipped judgement windows cannot be hit retroactively`);
+      assert.equal(result.held.some(Boolean), false, test.name);
+      assert.deepEqual(result.diag.input.heldColumns, [], test.name);
+      console.log(`PASS ${test.name}: skipped ${recovered.diag.scheduler.dropped} overdue actions, reconciled holds, hit all 4 later notes`);
+      await page.evaluate(() => AshtonkMania.GameplayScreen.quit());
+      await page.waitForFunction(() => AshtonkMania.Screens.currentName !== "gameplay", null, { timeout: 10_000 });
+      await page.waitForTimeout(800);
+      continue;
+    }
     if (test.seek) {
       await page.waitForFunction(() => window.__play?.held.some(Boolean) && Keyfall.phase === "RUNNING", null, { timeout: 30_000 });
       await page.evaluate(() => AshtonkMania.GameplayScreen.practiceSeek(7500));

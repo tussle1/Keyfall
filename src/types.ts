@@ -79,7 +79,11 @@ export interface GameLike {
   scoreSystem?: Record<string, unknown> | null;
   /** Site-provided beatmap metadata, used only for the overlay's chart label. */
   metadata?: { title?: string; artist?: string; version?: string };
-  /** Optional adapter-supplied structural identity for the active chart. */
+  /** Optional cheap liveness probe, avoiding conversion of a site's full chart. */
+  hasHitObjects?: boolean;
+  /** Cheap identity for session/engine/array replacements, not in-place note edits. */
+  chartRevision?: string;
+  /** Optional adapter-supplied structural fingerprint for the active chart. */
   chartSignature?: string;
   /** Optional read-only judgement clock at a performance.now() timestamp. */
   chartTimeAtHost?: (hostTime: number) => number | null;
@@ -126,7 +130,7 @@ export interface InputAction {
    * same-frame simultaneous inputs in a deterministic order.
    */
   simultaneous: boolean;
-  /** For `up` actions on holds: the hold's duration in ms. 0 for taps. */
+  /** For hold edges: the hold's original duration in ms. 0 for taps. */
   holdDuration: number;
 }
 
@@ -186,7 +190,7 @@ export interface Settings {
   timing: {
     /** Applied to every scheduled action. Negative = earlier. ms. */
     offset: number;
-    /** How far ahead of the playhead to arm precise timers. ms. */
+    /** Maximum interval between deadline rechecks over long gaps, in ms. */
     lookahead: number;
     /** Extra lead applied to compensate for dispatch latency. ms. */
     inputDelayCompensation: number;

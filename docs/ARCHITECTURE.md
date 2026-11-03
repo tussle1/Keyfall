@@ -104,8 +104,11 @@ isLN }`, installs input listeners on `window` capture, and judges against an
 AudioContext-derived `inputTime`. `src/detect/ashtonkAdapter.ts` projects the
 live session onto the same `GameLike` contract the engine already reads:
 `hitObjects`, `timeElapsed`, `state`, `columnKeybinds`, `scoreSystem`,
-`chartSignature` and `unsupportedReason`, plus an optional `chartTimeAtHost`
-judgement-clock predictor.
+`chartRevision`, `chartSignature` and `unsupportedReason`, plus an optional
+`chartTimeAtHost` judgement-clock predictor. A cheap revision catches session,
+engine and note-array replacements on the firing path; the 100ms monitor also
+checks the full layout fingerprint for in-place edits. Generic adapters without
+a revision retain their previous chart-rebuild behavior.
 
 There is still exactly one timeline, one `ClockMapper`, one `Scheduler`, one
 `InputManager`, one humanizer and one overlay. The adapter never calls the
@@ -153,16 +156,25 @@ An earlier version used `dChart > dHost * 8 + 250`, which misclassified a
 
 ### Why one rAF loop and not one timer per note
 
-The scheduler keeps a single `requestAnimationFrame` heartbeat. Each frame it:
+The scheduler keeps a single `requestAnimationFrame` heartbeat and at most one
+armed scheduler timer. Frames sample the clock, handle seeks, recover due actions
+and retarget accelerated deadlines. The timer is primed at start/resume, chains
+to the next batch without waiting for a frame, and rechecks its prediction at
+most a lookahead interval apart over long gaps. Thus slow rendering alone need
+not delay input when browser tasks and the game's judgement clock still run.
 
-1. samples the clock (and lets the clock model request a cursor resync),
-2. flushes anything already overdue, bounded by `MAX_CATCHUP_ACTIONS_PER_FRAME`,
-3. arms at most **one** timer for the next same-timestamp batch inside the
-   lookahead window.
+After a blocked-thread spike, the first timer or frame to wake uses the current
+clock. If more than `MAX_CATCHUP_ACTIONS_PER_FRAME` are overdue, the scheduler
+skips only the oldest overdue timestamp batches (never future actions) and
+reports the skipped actions. Input reconciliation releases held keys whose tails
+were skipped without releasing holds whose tails remain ahead. A detected seek
+likewise reconciles held keys before rebasing the cursor. No JavaScript can send
+events while the main thread is blocked: expired judgement windows may be
+missed, and the game may fail before recovery.
 
-That timer fires `spinThreshold` ms early, then busy-waits the remainder against
-an absolute deadline. Two independent budgets guard the spin: the deadline and a
-hard iteration cap, because the deadline derives from a *predicted* clock.
+Near a deadline the timer fires `spinThreshold` ms early, then busy-waits the
+remainder against an absolute deadline. Two independent budgets guard the
+spin: the deadline and a hard iteration cap.
 
 An earlier version computed the spin as `while (now() < now() + remaining)`.
 That reads as bounded but is not: if the clock does not advance (a frozen or
