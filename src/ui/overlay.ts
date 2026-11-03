@@ -17,6 +17,7 @@ import { formatTime, groupDigits, humanizeCode, round } from "../util/helpers";
 import { DebugPanel } from "./debug";
 import { el, hexToRgba, listen, setDataset, setDisabled, setText } from "./dom";
 import { KeyboardView } from "./keyboard";
+import { MOTION } from "./motion";
 import { ensureStyle, ROOT_CLASS } from "./styles";
 
 /** The panel is a view over the existing engine; no playback logic lives here. */
@@ -128,6 +129,7 @@ export class Overlay {
   private stopHint!: HTMLElement;
   private emergencyBtn!: HTMLButtonElement;
   private moreBtn!: HTMLButtonElement;
+  private moreText!: HTMLElement;
   private drawer!: HTMLElement;
   private drawerScroll!: HTMLElement;
   private mappingGrid!: HTMLElement;
@@ -158,6 +160,9 @@ export class Overlay {
   private listenDisposer: (() => void) | null = null;
   private dragState: { pointerId: number; offsetX: number; offsetY: number } | null = null;
   private resizeState: { pointerId: number; startX: number; startY: number; startW: number; startH: number } | null = null;
+  private rangePointer: { pointerId: number; x: number; y: number; wrap: HTMLElement; direct: boolean } | null = null;
+  private tabResize: Animation | null = null;
+  private motionPreference: MediaQueryList | null = null;
   private appearanceSignature = "";
   private sliderSequence = 0;
 
@@ -171,6 +176,7 @@ export class Overlay {
       attrs: { role: "region", "aria-label": "Keyfall autoplay controls", "aria-hidden": "true" },
     });
     this.build();
+    this.watchMotionPreference();
     this.setVisible(false);
     this.disposers.push(settingsManager.onChange(({ settings }) => this.syncFromSettings(settings)));
     this.syncFromSettings(settingsManager.all);
@@ -237,10 +243,11 @@ export class Overlay {
       ]));
     }
 
+    this.moreText = el("span", { text: " More!" });
     this.moreBtn = el("button", {
-      className: "wom-more-button", type: "button", text: "▸ More!",
+      className: "wom-more-button", type: "button",
       dataset: { part: "more" }, attrs: { "aria-expanded": "false", "aria-controls": "keyfall-settings" },
-    });
+    }, [el("span", { className: "wom-disclosure-icon", text: "▸", attrs: { "aria-hidden": "true" } }), this.moreText]);
     this.emergencyBtn = el("button", {
       className: "wom-emergency", type: "button", text: "Z · emergency",
       attrs: { title: "Emergency stop — immediately release every key" },
@@ -443,11 +450,18 @@ export class Overlay {
       dataset: { setting: spec.path },
       attrs: { "aria-label": `${spec.label}${spec.unit ? ` (${spec.unit})` : ""}`, title: spec.title ?? spec.label },
     });
+    const wrap = el("span", { className: "wom-range-wrap" }, [
+      input,
+      el("span", { className: "wom-range-visual", attrs: { "aria-hidden": "true" } }, [
+        el("span", { className: "wom-range-fill" }), el("span", { className: "wom-range-thumb" }),
+      ]),
+    ]);
     const reset = el("button", {
       className: "wom-slider-reset", type: "button", text: "↺",
       attrs: { title: `Reset ${spec.label}`, "aria-label": `Reset ${spec.label}` },
     });
     this.disposers.push(
+      listen(input, "pointerdown", (event) => this.beginRangePointer(event as PointerEvent, wrap)),
       listen(input, "input", () => this.settingsManager.set(spec.path, Number(input.value))),
       listen(reset, "click", () => this.settingsManager.set(spec.path, spec.initial)),
     );
@@ -456,9 +470,33 @@ export class Overlay {
       if (input.value !== String(current)) input.value = String(current);
       setText(value, `${round(current, 2)}${spec.unit ?? ""}`);
       const percent = Math.max(0, Math.min(100, ((current - spec.min) / (spec.max - spec.min)) * 100));
-      input.style.setProperty("--wom-progress", `${percent}%`);
+      const progress = `${percent}%`;
+      if (wrap.style.getPropertyValue("--wom-progress") !== progress) wrap.style.setProperty("--wom-progress", progress);
     });
-    return el("div", { className: `wom-slider-row${spec.wide ? " wom-slider-wide" : ""}` }, [label, value, input, reset]);
+    return el("div", { className: `wom-slider-row${spec.wide ? " wom-slider-wide" : ""}` }, [label, value, wrap, reset]);
+  }
+
+  private beginRangePointer(event: PointerEvent, wrap: HTMLElement): void {
+    if (event.button !== 0 || event.isPrimary === false) return;
+    this.endRangePointer();
+    this.rangePointer = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, wrap, direct: false };
+  }
+
+  private moveRangePointer(event: PointerEvent): void {
+    const range = this.rangePointer;
+    if (!range || range.pointerId !== event.pointerId || range.direct) return;
+    // A click on the track settles; actual pointer movement follows directly.
+    if (Math.hypot(event.clientX - range.x, event.clientY - range.y) > 2) {
+      range.direct = true;
+      setDataset(range.wrap, "direct", "1");
+    }
+  }
+
+  private endRangePointer(event?: PointerEvent): void {
+    const range = this.rangePointer;
+    if (!range || (event && range.pointerId !== event.pointerId)) return;
+    if (range.direct) setDataset(range.wrap, "direct", "0");
+    this.rangePointer = null;
   }
 
   private switchRow(label: string, path: string, read: (settings: Settings) => boolean): HTMLElement {
@@ -477,22 +515,79 @@ export class Overlay {
     return "#ff6b9d";
   }
 
+  private watchMotionPreference(): void {
+    if (typeof window.matchMedia !== "function") return;
+    this.motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const preference = this.motionPreference;
+    const onChange = (): void => {
+      if (!preference.matches) return;
+      this.cancelTabResize();
+      // CSS transition durations do not change retroactively. Finish any
+      // in-flight panel/control motion when the OS preference changes too.
+      if (typeof this.root.getAnimations === "function") {
+        for (const animation of this.root.getAnimations({ subtree: true })) {
+          try { animation.finish(); } catch { animation.cancel(); }
+        }
+      }
+    };
+    if (typeof preference.addEventListener === "function") {
+      this.disposers.push(listen(preference, "change", onChange));
+    } else if (typeof preference.addListener === "function") {
+      preference.addListener(onChange);
+      this.disposers.push(() => preference.removeListener(onChange));
+    }
+  }
+
+  private cancelTabResize(): void {
+    const animation = this.tabResize;
+    this.tabResize = null;
+    if (animation) {
+      animation.onfinish = null;
+      animation.oncancel = null;
+      animation.cancel();
+    }
+  }
+
   private setTab(tab: SettingsTab): void {
+    if (this.activeTab === tab && this.expanded) {
+      this.drawerScroll.scrollTop = 0;
+      return;
+    }
+    const animateResize = this.visible && this.expanded && !this.motionPreference?.matches
+      && typeof this.drawerScroll.animate === "function";
+    // offsetHeight is in layout pixels, unlike getBoundingClientRect, which is
+    // scaled by the user's UI scale and by the panel's entrance transform.
+    const fromHeight = animateResize ? this.drawerScroll.offsetHeight : 0;
+    this.cancelTabResize();
     this.activeTab = tab;
     this.setExpanded(true);
     this.drawerScroll.scrollTop = 0;
+    const toHeight = animateResize ? this.drawerScroll.offsetHeight : 0;
+    if (fromHeight > 0 && toHeight > 0 && Math.abs(fromHeight - toHeight) > 1) {
+      const animation = this.drawerScroll.animate(
+        [{ height: `${fromHeight}px` }, { height: `${toHeight}px` }],
+        { duration: MOTION.ms.tabResize, easing: MOTION.curve.smooth },
+      );
+      this.tabResize = animation;
+      animation.onfinish = () => { if (this.tabResize === animation) this.tabResize = null; };
+      animation.oncancel = () => { if (this.tabResize === animation) this.tabResize = null; };
+    }
   }
 
   private setExpanded(expanded: boolean): void {
     this.expanded = expanded;
     setDataset(this.root, "expanded", expanded ? "1" : "0");
     this.moreBtn.setAttribute("aria-expanded", String(expanded));
-    setText(this.moreBtn, expanded ? "▾ Less!" : "▸ More!");
+    setText(this.moreText, expanded ? " Less!" : " More!");
     this.drawer.setAttribute("aria-hidden", String(!expanded));
     this.drawer.inert = !expanded;
     for (const [tab, button] of this.tabButtons) button.setAttribute("aria-pressed", String(expanded && tab === this.activeTab));
     for (const [tab, panel] of this.tabPanels) panel.classList.toggle("wom-hidden", tab !== this.activeTab);
-    if (!expanded) this.cancelListen();
+    if (!expanded) {
+      this.cancelTabResize();
+      this.endRangePointer();
+      this.cancelListen();
+    }
   }
 
   private renderMappingGrid(force = false): void {
@@ -599,6 +694,8 @@ export class Overlay {
   setVisible(visible: boolean): void {
     this.visible = visible;
     if (!visible) {
+      this.cancelTabResize();
+      this.endRangePointer();
       this.cancelListen();
       const focused = document.activeElement as HTMLElement | null;
       if (focused && typeof this.root.contains === "function" && this.root.contains(focused)) focused.blur();
@@ -624,9 +721,19 @@ export class Overlay {
         this.resizeState = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, startW: rect.width, startH: rect.height };
         e.preventDefault(); e.stopPropagation();
       }),
-      listen(window, "pointermove", (event) => this.onPointerMove(event as PointerEvent)),
-      listen(window, "pointerup", (event) => this.onPointerUp(event as PointerEvent)),
-      listen(window, "pointercancel", (event) => this.onPointerUp(event as PointerEvent)),
+      listen(window, "pointermove", (event) => {
+        this.moveRangePointer(event as PointerEvent);
+        this.onPointerMove(event as PointerEvent);
+      }),
+      listen(window, "pointerup", (event) => {
+        this.endRangePointer(event as PointerEvent);
+        this.onPointerUp(event as PointerEvent);
+      }),
+      listen(window, "pointercancel", (event) => {
+        this.endRangePointer(event as PointerEvent);
+        this.onPointerUp(event as PointerEvent);
+      }),
+      listen(window, "blur", () => this.endRangePointer()),
       listen(window, "resize", () => { this.appearanceSignature = ""; this.applyAppearance(this.settingsManager.all); }),
     );
   }
@@ -822,6 +929,8 @@ export class Overlay {
   }
 
   dispose(): void {
+    this.cancelTabResize();
+    this.endRangePointer();
     this.cancelListen();
     for (const dispose of [...this.mappingDisposers.splice(0), ...this.hotkeyDisposers.splice(0), ...this.disposers.splice(0)]) {
       try { dispose(); } catch { /* already gone */ }

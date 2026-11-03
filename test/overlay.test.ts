@@ -4,9 +4,10 @@ import { DEFAULT_SETTINGS } from "../src/constants";
 import { SettingsManager } from "../src/core/settings";
 import { HotkeyManager } from "../src/hotkeys";
 import { Overlay, type OverlayHost } from "../src/ui/overlay";
+import { MOTION } from "../src/ui/motion";
 import { buildCss } from "../src/ui/styles";
 import type { HotkeyAction, ParsedChart } from "../src/types";
-import { installDom, type StubElement, type StubEnvironment } from "./helpers/domStub";
+import { installDom, StubEventTarget, type StubElement, type StubEnvironment } from "./helpers/domStub";
 
 let env: StubEnvironment;
 beforeEach(() => { env = installDom(); env.globalsInstalled(); });
@@ -83,11 +84,50 @@ describe("trainer overlay", () => {
     sliders[0].dispatchEvent(event("input"));
     assert.equal(settings.all.timing.offset, -37);
     assert.equal(sliders[1].value, "-37");
-    assert.notEqual(sliders[0].style.getPropertyValue("--wom-progress"), "");
+    assert.equal((sliders[0].parentNode as HTMLElement).style.getPropertyValue("--wom-progress"), "40.75%");
+    assert.equal((sliders[1].parentNode as HTMLElement).style.getPropertyValue("--wom-progress"), "40.75%");
+    assert.equal(sliders[0].type, "range", "the visual overlay does not replace the native input");
+    assert.equal(sliders[0].getAttribute("aria-label"), "Offset (ms)");
     const reset = find(overlay.root, ".wom-slider-reset");
     reset.dispatchEvent(event("click"));
     assert.equal(settings.all.timing.offset, 0);
     assert.equal(sliders[1].value, "0");
+    overlay.dispose(); settings.dispose();
+  });
+
+  it("settles clicks but switches to direct pointer tracking while dragging", () => {
+    const { overlay, settings } = createOverlay();
+    overlay.setVisible(true);
+    const [slider, mirror] = overlay.root.querySelectorAll<HTMLInputElement>('[data-setting="timing.offset"]');
+    const wrap = slider.parentNode as HTMLElement;
+    const mirrorWrap = mirror.parentNode as HTMLElement;
+    const pointer = (type: string, pointerId: number, clientX: number, clientY = 0) =>
+      event(type, { pointerId, clientX, clientY, button: 0, isPrimary: true });
+
+    slider.dispatchEvent(pointer("pointerdown", 1, 100));
+    slider.value = "50"; slider.dispatchEvent(event("input"));
+    assert.notEqual(wrap.dataset.direct, "1", "a track click may settle");
+    assert.equal(wrap.style.getPropertyValue("--wom-progress"), "62.5%");
+    env.window.dispatchEvent(pointer("pointermove", 2, 150));
+    assert.notEqual(wrap.dataset.direct, "1", "another pointer cannot start this drag");
+    env.window.dispatchEvent(pointer("pointermove", 1, 101));
+    assert.notEqual(wrap.dataset.direct, "1", "tiny click jitter is not a drag");
+    env.window.dispatchEvent(pointer("pointermove", 1, 120));
+    assert.equal(wrap.dataset.direct, "1");
+    slider.value = "100"; slider.dispatchEvent(event("input"));
+    assert.equal(settings.all.timing.offset, 100);
+    assert.equal(mirror.value, "100");
+    assert.equal(wrap.style.getPropertyValue("--wom-progress"), "75%");
+    assert.equal(mirrorWrap.style.getPropertyValue("--wom-progress"), "75%");
+    assert.notEqual(mirrorWrap.dataset.direct, "1", "only the manipulated control tracks directly");
+    env.window.dispatchEvent(pointer("pointercancel", 1, 120));
+    assert.equal(wrap.dataset.direct, "0");
+
+    slider.dispatchEvent(pointer("pointerdown", 3, 100));
+    env.window.dispatchEvent(pointer("pointermove", 3, 130));
+    overlay.setVisible(false);
+    assert.equal(wrap.dataset.direct, "0", "hiding cancels direct manipulation");
+    assert.equal(overlay.root.inert, true);
     overlay.dispose(); settings.dispose();
   });
 
@@ -125,6 +165,81 @@ describe("trainer overlay", () => {
     assert.equal(drawer.inert, true);
     assert.equal(overlay.root.dataset.expanded, "0");
     overlay.dispose(); settings.dispose();
+  });
+
+  it("interrupts tab resizes using unscaled heights and cancels them on close, hide, preference change and disposal", () => {
+    const preference = Object.assign(new StubEventTarget(), { matches: false });
+    env.window.matchMedia = () => preference;
+    const { overlay, settings } = createOverlay();
+    overlay.setVisible(true);
+    settings.set("appearance.uiScale", 1.5);
+    let cssFinished = 0;
+    let cssCancelled = 0;
+    (overlay.root as any).getAnimations = (options: { subtree: boolean }) => {
+      assert.equal(options.subtree, true);
+      return [
+        { finish: () => { cssFinished++; } },
+        { finish: () => { throw new Error("cannot finish"); }, cancel: () => { cssCancelled++; } },
+      ];
+    };
+    const scroll = find(overlay.root, ".wom-drawer-scroll");
+    const animations: any[] = [];
+    const heights: Record<string, number> = { timing: 210, humanize: 310, input: 280, appearance: 240 };
+    Object.defineProperty(scroll, "offsetHeight", {
+      get: () => {
+        const running = animations.at(-1);
+        if (running && !running.cancelled) return running.currentHeight;
+        const active = ["timing", "humanize", "input", "appearance"].find((tab) =>
+          !find(overlay.root, `[data-tab-panel="${tab}"]`).classList.contains("wom-hidden"));
+        return heights[active!];
+      },
+    });
+    scroll.animate = (frames: Array<{ height: string }>, timing: { duration: number; easing: string }) => {
+      const animation = {
+        frames, timing, currentHeight: Number.parseFloat(frames[0].height), cancelled: false,
+        onfinish: null, oncancel: null,
+        cancel() { this.cancelled = true; },
+      };
+      animations.push(animation);
+      return animation;
+    };
+    const tab = (id: string) => find(overlay.root, `[data-tab="${id}"]`).dispatchEvent(event("click"));
+    tab("timing");
+    assert.equal(animations.length, 0, "opening the drawer uses the drawer transition");
+    tab("humanize");
+    assert.deepEqual(animations[0].frames, [{ height: "210px" }, { height: "310px" }]);
+    assert.deepEqual(animations[0].timing, { duration: MOTION.ms.tabResize, easing: MOTION.curve.smooth });
+    animations[0].currentHeight = 250;
+    tab("input");
+    assert.equal(animations[0].cancelled, true);
+    assert.deepEqual(animations[1].frames, [{ height: "250px" }, { height: "280px" }], "rapid changes start from the current layout height");
+    find(overlay.root, '[data-part="more"]').dispatchEvent(event("click"));
+    assert.equal(animations[1].cancelled, true);
+    assert.equal(find(overlay.root, '[data-part="settings"]').inert, true);
+
+    tab("timing"); tab("input");
+    assert.equal(animations.length, 3);
+    overlay.setVisible(false);
+    assert.equal(animations[2].cancelled, true);
+    assert.equal(overlay.root.inert, true);
+    overlay.setVisible(true);
+    tab("timing");
+    assert.equal(animations.length, 4);
+    preference.matches = true;
+    preference.dispatchEvent(event("change"));
+    assert.equal(animations[3].cancelled, true, "enabling reduced motion stops an in-flight resize");
+    assert.equal(cssFinished, 1, "in-flight CSS transitions finish too");
+    assert.equal(cssCancelled, 1, "an unfinishable animation is cancelled");
+    tab("humanize");
+    assert.equal(animations.length, 4, "reduced motion skips new resize animations");
+    preference.matches = false;
+    preference.dispatchEvent(event("change"));
+    tab("timing");
+    assert.equal(animations.length, 5);
+    overlay.dispose();
+    assert.equal(animations[4].cancelled, true);
+    assert.equal(preference.listenerCount("change"), 0);
+    settings.dispose();
   });
 
   it("routes action buttons correctly and changes start into pause / resume", () => {
@@ -181,11 +296,17 @@ describe("trainer overlay", () => {
     overlay.dispose(); settings.dispose();
   });
 
-  it("contains eased panel/drawer/switch motion and a reduced-motion fallback", () => {
+  it("uses distinct spring, exit and press curves with direct-drag and reduced-motion fallbacks", () => {
     const css = buildCss("#ff6b9d");
-    assert.match(css, /cubic-bezier\(\.22, 1, \.36, 1\)/);
-    assert.match(css, /grid-template-rows \.38s/);
+    for (const curve of Object.values(MOTION.curve)) assert.ok(css.includes(curve));
+    assert.match(css, new RegExp(`transform ${MOTION.ms.panelEnter}ms var\\(--wom-ease-spring\\)`));
+    assert.match(css, new RegExp(`transform ${MOTION.ms.panelExit}ms var\\(--wom-ease-exit\\)`));
+    assert.match(css, new RegExp(`grid-template-rows ${MOTION.ms.drawerEnter}ms`));
+    assert.match(css, /\.wom-range-wrap\[data-direct="1"\] \.wom-range-fill \{ transition: none; \}/);
+    assert.match(css, /\.wom-range:focus-visible \+ \.wom-range-visual/);
     assert.match(css, /prefers-reduced-motion: reduce/);
+    assert.match(css, /transition-duration: 0s !important/);
+    assert.match(css, /transition-delay: 0s !important/);
   });
 
   it("prefers an available Torus font before the bundled rounded fallback", () => {

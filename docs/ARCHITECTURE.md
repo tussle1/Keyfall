@@ -229,6 +229,23 @@ no-op on an unchanged value, so DOM writes are proportional to actual change.
 The debug panel buffers and flushes on an interval instead of appending per
 event, and when debug mode is off it allocates nothing at all.
 
+### UI motion without a second frame loop
+
+`ui/motion.ts` centralizes spring-inspired Bézier curves and timings. CSS handles
+interruptible panel, drawer and control transitions; it does not touch the
+scheduler. The sliders retain native range inputs for keyboard and accessibility
+semantics. A decorative thumb follows the same setting, easing clicks and resets
+but switching off positional transitions during pointer drags; window dragging
+and resizing also stay direct. Mirrored settings still update immediately.
+
+Only the height change between already-open tabs uses the Web Animations API. It
+samples unscaled layout heights, cancels and restarts from the current height on
+rapid tab changes, and cancels when the drawer or panel closes or the UI is
+uninstalled. `prefers-reduced-motion` disables new motion and finishes/cancels
+in-flight animations when the preference changes. ARIA and inert state are
+updated immediately, not at the end of an animation. There is no animation
+polling or per-frame JavaScript loop.
+
 ### Humanization: why it is baked into the timeline
 
 It would be simpler to perturb each action at fire time. That does not work, for

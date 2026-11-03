@@ -12,7 +12,7 @@ either site's built-in Autoplay/Auto mod.
 
 [![Status](https://img.shields.io/badge/status-active-success)](#disclaimer)
 [![Code license: MIT](https://img.shields.io/badge/code_license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.3.1-ff6b9d)](#installation)
+[![Version](https://img.shields.io/badge/version-1.4.0-ff6b9d)](#installation)
 [![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=000)](#development)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=fff)](#development)
 [![HTML5](https://img.shields.io/badge/HTML5-E34F26?logo=html5&logoColor=fff)](#try-it-without-the-site)
@@ -164,9 +164,11 @@ See [Humanization in depth](#humanization-in-depth).
 
 - A compact trainer-style window, hidden on page load and opened/closed only
   by **Right Shift**. Its cover, slim sliders, switches, option buttons and
-  geometric action buttons use smooth, decelerating motion; reduced-motion
-  preferences are respected. The UI prefers Torus when available and otherwise
-  uses the bundled rounded Comfortaa font.
+  geometric action buttons use Apple-style, spring-inspired easing, with separate
+  enter/exit and press/release curves. Slider clicks settle smoothly, while
+  dragging follows the pointer directly; reduced-motion preferences are
+  respected. The UI prefers Torus when available and otherwise uses the bundled
+  rounded Comfortaa font.
 - Start / pause / resume, stop, and emergency-stop controls.
 - Notes remaining, accuracy, combo and score — read from the site's own score
   system, not recomputed and not scraped from the Pixi HUD.
@@ -750,15 +752,16 @@ first.
 npm install
 npm run build      # → dist/keyfall.js, dist/keyfall.user.js, dist/bookmarklet*.txt
 npm run watch
-npm test           # 275 unit + integration tests
+npm test           # unit + integration tests
 npm run smoke      # builds, then runs the SHIPPED BUNDLE against a stubbed site
 npm run verify     # typecheck + test + smoke
 npm run demo       # sandbox at http://localhost:5173/
 ```
 
 **Requirements:** Node 20+ to build; Node 22.18+ to run the native TypeScript
-tests and `npm run verify`. Two dev dependencies only — `esbuild` and
-`typescript`. The shipped bundle has zero runtime dependencies.
+tests and `npm run verify`. The dev dependencies are `esbuild`, `typescript`,
+and `playwright-core` (for the optional real-browser motion test). The shipped
+bundle has zero runtime dependencies.
 
 Tests run on `node --test` with Node's native type stripping: no test framework
 and no transform step. Node strips types but still requires fully specified ESM
@@ -767,6 +770,19 @@ paths, while the source uses extensionless imports (correct for a bundler and fo
 `.ts`. `test/helpers/domStub.ts` provides a minimal DOM and a **manual clock** —
 nothing runs until `advance()` is called, so timing assertions are exact rather
 than flaky.
+
+For the real Chromium motion regression, run `npm run build` and `npm run demo`
+in one terminal, then in another run:
+
+```bash
+CHROME_PATH=/path/to/chrome npm run test:motion
+```
+
+`playwright-core` does not download a browser; point `CHROME_PATH` at an existing
+Chrome/Chromium executable (or use an already installed Playwright Chromium).
+`KEYFALL_DEMO_URL` can select another demo URL. The check exercises interrupted
+transitions, native slider keyboard/drag behavior, scaled tab resizing, window
+movement and dynamic reduced-motion changes; it does not play a live game.
 
 **Run the smoke test after any change.** It loads the actual bundled bytes through
 the real bootstrap path. That is how the hold-head bug in
@@ -836,7 +852,7 @@ exercised end to end without the live site.
 3. **Add a test.** If you changed timing or ordering behaviour, this is not
    optional. The two hardest bugs in this codebase were both invisible in manual
    testing and obvious under the stubbed clock.
-4. **Run `npm run verify`** — typecheck, 275 tests, and the bundle smoke test.
+4. **Run `npm run verify`** — typecheck, unit/integration tests, and the bundle smoke test.
 5. **Check by hand** against the real site, in this order: a 4K tap-only map, a
    map with holds (including one that ends exactly where the next note on that
    column starts), a dense stream, 7K or higher, pause and resume mid-hold, a
