@@ -174,6 +174,7 @@ export type HotkeyAction =
 export interface Settings {
   general: {
     enabled: boolean;
+    /** Legacy stored value; visibility is controlled only by Right Shift. */
     showOverlay: boolean;
     showKeyboard: boolean;
     debug: boolean;
@@ -200,6 +201,7 @@ export interface Settings {
     opacity: number;
     accent: string;
     position: { x: number; y: number };
+    /** Legacy stored value; the trainer panel no longer has a mini-bar. */
     collapsed: boolean;
     size: { w: number; h: number };
   };

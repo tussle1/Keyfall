@@ -271,7 +271,7 @@ reached; requests are never modified, blocked or replayed.
 | Stops setting `window.__PIXI_APP__` | Strategy 1 fails | Strategies 2/3 (canvas scan, fiber probe) still work |
 | Renames `Game` fields | `looksLikeGame` may reject | Widen the shape check in `src/detect/fiber.ts` |
 | Adds an `isTrusted` check | **Input stops working entirely** | No legitimate fix. This is the hard ceiling. |
-| Moves keybinds out of `settings.keybinds.keyModes` | Auto-mapping fails | Configure the mapping manually in Settings → Input |
+| Moves keybinds out of `settings.keybinds.keyModes` | Auto-mapping fails | Configure the mapping manually in More! → Input |
 | Changes `.osz` provider or transport | Fallback parser loses its source | Primary path unaffected (it reads the live game) |
 | Switches renderer away from Pixi | `__PIXI_APP__` disappears | Strategies 2/3 |
 | Changes hold representation | Timeline may double-fire | Update pass 1 of `src/chart/timeline.ts`, and `countUniqueNotes` |

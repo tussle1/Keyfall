@@ -213,6 +213,35 @@ describe("InputManager", () => {
     input.dispose();
   });
 
+  it("preserves valid holds and deferred taps while releasing keys skipped by a timeline change", () => {
+    const game = installFakeGame(["KeyD", "KeyF", "KeyJ", "KeyK"]);
+    const input = new InputManager({
+      target: env.document,
+      eventCtor: StubKeyboardEvent as any,
+      now: () => env.now(),
+      scheduleTask: (fn, ms) => env.window.setTimeout(fn, ms),
+      cancelTask: (h) => env.window.clearTimeout(h),
+    });
+    input.setMapping(mapping(["KeyD", "KeyF", "KeyJ", "KeyK"]));
+    input.applyActions([
+      action(1000, "down", 0, "KeyD"), action(1000, "down", 1, "KeyF"),
+      action(1000, "down", 2, "KeyJ"), action(1000, "up", 2, "KeyJ"),
+      action(1000, "down", 3, "KeyK"),
+    ], 1000);
+    const released = input.reconcileHeld([
+      action(1100, "up", 1, "KeyF"), // moved behind the playhead by the offset
+      action(1600, "up", 0, "KeyD"), // still has a future release
+      action(1800, "down", 1, "KeyF"), // a new press must not be suppressed
+    ], 1200, -200);
+    assert.equal(released, 2);
+    assert.deepEqual(game.pressedColumns, [true, false, true, false]);
+    env.advance(20);
+    assert.equal(game.pressedColumns[2], false, "the deferred tap releases on its own timer");
+    input.applyActions([action(1600, "up", 0, "KeyD")], 1600);
+    assert.deepEqual(game.pressedColumns, [false, false, false, false]);
+    input.dispose();
+  });
+
   it("defers a tap release so the key is measurably down", () => {
     const game = installFakeGame(["KeyD", "KeyF", "KeyJ", "KeyK"]);
     const input = new InputManager({

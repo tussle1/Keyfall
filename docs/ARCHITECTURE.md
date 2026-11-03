@@ -287,7 +287,7 @@ retrospectively, which made the counts depend on arrival order.
 
 ## Testing
 
-254 tests, `node --test`, no test framework dependency, plus a 46-check smoke test
+274 tests, `node --test`, no test framework dependency, plus a 57-check smoke test
 that runs the shipped bundle. The Ashtonk!mania tests include an end-to-end run
 through the DOM stub's `document -> window` capture path.
 
@@ -305,7 +305,7 @@ playback rate, malformed input, rejection cases), timeline ordering and
 deduplication, clock fitting and discontinuity classification, scheduler
 ordering/batching/catch-up/seek/pause/stop, input dispatch including the jack
 regression, settings validation and persistence, seeded RNG distributions,
-humanization determinism and its ordering invariants, and 32 end-to-end tests that
+humanization determinism and its ordering invariants, and end-to-end tests that
 drive a stubbed site through the real engine — including "no stuck keys" on stop,
 emergency stop, dispose, play failure and game disappearance, and humanized
 playback across five seeds with holds, release variation, fatigue and drift all

@@ -431,10 +431,34 @@ describe("legacy hotkey migration", () => {
     settings.dispose();
   });
 
-  it("keeps a customised toggle as stored", () => {
+  it("migrates a customised UI toggle to the fixed Right Shift shortcut", () => {
     store({ toggleUI: "KeyM", start: "KeyG", pause: "KeyB", stop: "KeyX", emergency: "KeyZ" });
     const settings = new SettingsManager(undefined, env.window);
-    assert.equal(settings.all.input.hotkeys.toggleUI, "KeyM");
+    assert.equal(settings.all.input.hotkeys.toggleUI, "ShiftRight");
+    assert.equal(settings.all.input.hotkeys.start, "KeyG");
     settings.dispose();
+  });
+
+  it("reserves Right Shift even when another action tries to claim it", () => {
+    const settings = new SettingsManager(undefined, env.window);
+    settings.set("input.hotkeys.start", "ShiftRight");
+    settings.set("input.hotkeys.toggleUI", "KeyM");
+    assert.equal(settings.all.input.hotkeys.toggleUI, "ShiftRight");
+    assert.equal(settings.all.input.hotkeys.start, DEFAULT_SETTINGS.input.hotkeys.start);
+    settings.dispose();
+  });
+
+  it("migrates old visual defaults once, while preserving later deliberate choices", () => {
+    env.window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ appearance: { size: { w: 296, h: 0 }, opacity: 0.92 } }));
+    const settings = new SettingsManager(undefined, env.window);
+    assert.equal(settings.all.appearance.size.w, 427);
+    assert.equal(settings.all.appearance.opacity, 1);
+    settings.set("appearance.size", { w: 296, h: 0 });
+    settings.set("appearance.opacity", 0.92);
+    env.advance(300);
+    const reloaded = new SettingsManager(undefined, env.window);
+    assert.equal(reloaded.all.appearance.size.w, 296);
+    assert.equal(reloaded.all.appearance.opacity, 0.92);
+    settings.dispose(); reloaded.dispose();
   });
 });

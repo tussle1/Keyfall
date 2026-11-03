@@ -156,7 +156,15 @@ try {
   // Reported as a failed check below so the rest of the smoke test still runs.
 }
 
+// A saved, previously visible/custom-bound panel must not bypass the new
+// keyboard-only, initially-hidden behavior after an upgrade.
+env.window.localStorage.setItem("keyfall:settings:v1", JSON.stringify({
+  general: { showOverlay: true }, input: { hotkeys: { toggleUI: "KeyM" } },
+}));
 const fake = makeFakeGame();
+// A secondary game binding still conflicts with the fixed panel shortcut,
+// even though it is not part of the primary mapping used for playback.
+fake.game.columnKeybinds[0][1] = "ShiftRight";
 
 // Load the bundle exactly as a browser would: as a script in global scope.
 try {
@@ -189,6 +197,8 @@ check(
   "userscript description disclaims the sites' built-in Autoplay",
   /Never uses either site's built-in Autoplay\/Auto mod/.test(userscriptCode),
 );
+check("trainer artwork is embedded in the shipped bundle", userscriptCode.includes("data:image/jpeg;base64,"));
+check("trainer motion respects reduced-motion preferences", userscriptCode.includes("prefers-reduced-motion"));
 
 const api = env.window.Keyfall;
 check("exposes window.Keyfall", !!api);
@@ -206,9 +216,40 @@ if (api) {
   check("mapping read from the site", diag.mapping?.source === "site", String(diag.mapping?.source));
   check("mapping codes match the site keybinds", JSON.stringify(diag.mapping?.codes) === JSON.stringify(KEYBINDS));
   check("overlay element mounted", !!api.overlayElement);
+  const rootEl = api.overlayElement;
+  check("panel starts hidden and inert even for an old visible store",
+    api.uiVisible === false && rootEl?.dataset.open === "0" && rootEl?.inert === true);
+  check("old custom UI key migrates to Right Shift", api.settings.all.input.hotkeys.toggleUI === "ShiftRight");
+  check("there is no mouse/console showUI launcher", typeof api.showUI === "undefined");
+  const keydown = (code, { trusted = true, repeat = false, ctrlKey = false } = {}) => {
+    env.document.dispatchEvent({
+      type: "keydown", code, isTrusted: trusted, repeat, ctrlKey, metaKey: false, altKey: false,
+      bubbles: false, defaultPrevented: false,
+      preventDefault() { this.defaultPrevented = true; },
+      stopPropagation() { this.__propagationStopped = true; },
+    });
+  };
+  keydown("KeyM");
+  keydown("ShiftLeft");
+  keydown("ShiftRight", { trusted: false });
+  keydown("ShiftRight", { repeat: true });
+  keydown("ShiftRight", { ctrlKey: true });
+  check("other, synthetic, repeated and modified keys cannot open the panel", api.uiVisible === false);
+  api.settings.set("general.showOverlay", true);
+  check("legacy visibility setting cannot open the panel", api.uiVisible === false);
+  keydown("ShiftRight");
+  check("trusted Right Shift opens the panel", api.uiVisible === true && rootEl?.dataset.open === "1" && rootEl?.inert === false);
+  keydown("ShiftRight");
+  check("trusted Right Shift closes the panel", api.uiVisible === false && rootEl?.dataset.open === "0" && rootEl?.inert === true);
 
   api.start();
   check("phase becomes RUNNING", api.phase === "RUNNING", String(api.phase));
+  const notice = rootEl?.querySelector('[data-part="notice"]');
+  check("secondary Right Shift collision stays visible during play",
+    notice?.textContent.includes("Right Shift is fixed") && !notice.classList.contains("wom-hidden"));
+  fake.game.columnKeybinds[0][1] = null;
+  api.settings.set("general.debug", false); // re-check the now-resolved game binding
+  check("resolved hotkey collision clears its warning", notice?.classList.contains("wom-hidden"));
 
   // Drive the site's clock forward, one frame at a time.
   for (let t = 0; t <= 3200; t += 16) {

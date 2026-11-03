@@ -12,7 +12,7 @@ either site's built-in Autoplay/Auto mod.
 
 [![Status](https://img.shields.io/badge/status-active-success)](#disclaimer)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.2.0-ff6b9d)](#installation)
+[![Version](https://img.shields.io/badge/version-1.3.0-ff6b9d)](#installation)
 [![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=000)](#development)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=fff)](#development)
 [![HTML5](https://img.shields.io/badge/HTML5-E34F26?logo=html5&logoColor=fff)](#try-it-without-the-site)
@@ -162,16 +162,17 @@ See [Humanization in depth](#humanization-in-depth).
 
 ### User interface
 
-- START / PAUSE / STOP / EMERGENCY STOP controls, with a status readout.
+- A compact trainer-style window, hidden on page load and opened/closed only
+  by **Right Shift**. Its cover, slim sliders, switches, option buttons and
+  geometric action buttons use smooth, decelerating motion; reduced-motion
+  preferences are respected.
+- Start / pause / resume, stop, and emergency-stop controls.
 - Notes remaining, accuracy, combo and score — read from the site's own score
   system, not recomputed and not scraped from the Pixi HUD.
-- Live keyboard visualisation that lights as the automation presses columns.
-- Timing Offset slider, −200ms to +200ms in 1ms steps.
-- Draggable by the title bar, resizable from the bottom-right corner, collapsible
-  to a mini bar, with adjustable opacity, UI scale and accent colour.
-- Five settings tabs: General, Timing, Humanize, Input, Appearance.
-- Debug mode with a structured `[DEBUG]` snapshot and a buffered log.
-- Console API on `window.Keyfall`.
+- Live keyboard visualisation, timing sliders, humanization, keybinds, debug,
+  and appearance controls in **More!** → Timing / Humanize / Input / Display.
+- Draggable title bar, bottom-right resize handle, adjustable opacity, UI scale
+  and accent colour. Console API on `window.Keyfall`.
 
 ### Compatibility
 
@@ -366,13 +367,13 @@ Node 20+ is needed to build. The bundle itself has **zero runtime dependencies**
 **Userscript.** Install from the raw URL above, or open `dist/keyfall.user.js`
 and accept the install prompt, or drag it onto your userscript manager's
 dashboard. The header matches `webosumania.com` and
-`v2-ashtonkmania.lokaux.workers.dev`. Load either host — the overlay appears in
-the top-left. On Ashtonk!mania, start a map in **Practice** mode.
+`v2-ashtonkmania.lokaux.workers.dev`. Load either host and press **Right Shift**
+to open the panel. On Ashtonk!mania, start a map in **Practice** mode.
 
 **Plain script.** Load `dist/keyfall.js` however you like. It exposes
 `window.Keyfall`.
 
-**Bookmarklet.** `dist/bookmarklet.txt` is about 150 KB, and most browsers
+**Bookmarklet.** `dist/bookmarklet.txt` is about 270 KB, and most browsers
 truncate bookmark URLs past roughly 64 KB — so it will not work as-is in most
 setups. Two options that do: host `dist/keyfall.js` somewhere you control and put
 that URL into `dist/bookmarklet-loader.txt`, or just use the userscript, which has
@@ -384,21 +385,22 @@ no size limit and survives navigation.
    <https://v2-ashtonkmania.lokaux.workers.dev/>. If Keyfall does not recognise
    it, the overlay says `Web osu!mania not detected.` (legacy wording) and
    produces no input.
-2. **Confirm it loaded.** The overlay appears top-left. In the console,
-   `Keyfall.version` and `Keyfall.diagnostics()` both work.
+2. **Open Keyfall.** Press **Right Shift**. The panel starts hidden on every
+   page load; the same key closes it. `Keyfall.version` and
+   `Keyfall.diagnostics()` also work in the console.
 3. **Open a mania chart and start the play.** Detection is automatic; the overlay
-   reports the key count, note count and pattern breakdown.
-4. **Check the key mapping.** Settings → Input shows what was read from the site.
+   reports the key and note counts. More! → Display shows the pattern breakdown.
+4. **Check the key mapping.** More! → Input shows what was read from the site.
    The source should read `site`. If it says `fallback`, click a column and press
    the key you want.
-5. **Set timing.** Settings → Timing. Leave Offset at 0 first and see how it plays,
+5. **Set timing.** Use the main sliders or More! → Timing. Leave Offset at 0 first and see how it plays,
    then correct for your output latency.
-6. **Optionally enable humanization.** Settings → Humanize. Pick a seed, set a
+6. **Optionally enable humanization.** More! → Humanize. Pick a seed, set a
    strength, and watch the statistics readout.
 7. **Start.** Press `G` or click START.
 8. **Monitor.** Status, notes remaining, accuracy, combo and score update live.
-   The keyboard visualisation lights as columns are pressed. Press `Right Shift`
-   twice to hide the panel if it is in the way.
+   The keyboard visualisation in More! → Display lights as columns are pressed.
+   Press `Right Shift` once to hide the panel if it is in the way.
 9. **Stop or restart.** `X` stops and releases everything. `B` pauses and
    resumes. `Z` is the emergency stop — total reset, every key released,
    detection re-armed. Changing beatmap needs no action: the new chart is picked
@@ -419,16 +421,16 @@ submitted to ranked or online leaderboards. The site's own Auto is never used.
 Ashtonk!mania installs gameplay key listeners on `window` capture; Keyfall's
 normal document-dispatched, bubbling synthetic events still reach them. Some
 high-key default layouts collide with the default hotkeys `G`, `B`, `X` and `Z`;
-the overlay reports collisions and the hotkeys can be rebound in Settings →
-Input. See [`docs/ASHTONK-CONTRACT.md`](docs/ASHTONK-CONTRACT.md).
+the overlay reports collisions and the action hotkeys can be rebound in More! →
+Input. Right Shift stays reserved for the panel. See [`docs/ASHTONK-CONTRACT.md`](docs/ASHTONK-CONTRACT.md).
 
 <div align="center">
 
-*Screenshot placeholders — replace with real captures.*
+*Trainer-style panel and expanded Humanize settings, shown in the local demo.*
 
 | | |
 |---|---|
-| ![Overlay expanded](assets/screenshot-overlay.png) | ![Humanize tab](assets/screenshot-humanize.png) |
+| ![Compact panel](assets/screenshot-overlay.png) | ![Humanize tab](assets/screenshot-humanize.png) |
 | `assets/screenshot-overlay.png` | `assets/screenshot-humanize.png` |
 
 </div>
@@ -447,22 +449,22 @@ Keyfall.diagnostics();    // everything, including clock fit and jitter
 
 Keyfall.setOffset(-12);
 Keyfall.setDebug(true);
-Keyfall.showUI();  Keyfall.hideUI();
+Keyfall.uiVisible;        // read-only; use Right Shift to open or close
 Keyfall.resetSettings();
 Keyfall.uninstall();
 ```
 
 ## Configuration
 
-Every setting persists to `localStorage` and is clamped on load — a corrupted or
-hand-edited value cannot put the tool into an invalid state.
+Settings persist to `localStorage` and are clamped on load — a corrupted or
+hand-edited value cannot put the tool into an invalid state. Panel visibility is
+transient: it starts hidden each time and is toggled only with Right Shift.
 
 ### General
 
 | Setting | Description | Default |
 |---|---|---|
 | Enable autoplay | Master switch for the engine | On |
-| Show overlay | Whether the panel is in the DOM | On |
 | Show keyboard | The live keyboard visualisation | On |
 | Debug mode | Structured `[DEBUG]` snapshot and log | Off |
 
@@ -470,10 +472,10 @@ hand-edited value cannot put the tool into an invalid state.
 
 | Setting | Range | Description | Default |
 |---|---|---|---|
-| Timing Offset | −200 … +200 ms | Shifts every input. Positive fires earlier. | `0 ms` |
+| Timing Offset | −200 … +200 ms | Shifts every input. Negative fires earlier. | `0 ms` |
 | Lookahead | 20 … 500 ms | How far ahead of the playhead to arm precise timers | `120 ms` |
-| Input delay | −60 … +60 ms | Extra lead to compensate for dispatch latency | `0 ms` |
-| Spin window | 0 … 20 ms | Bound on the busy-wait used for sub-millisecond placement | `6 ms` |
+| Input delay | −100 … +100 ms | Extra lead to compensate for dispatch latency | `0 ms` |
+| Spin window | 0 … 25 ms | Bound on the busy-wait used for sub-millisecond placement | `6 ms` |
 
 ### Humanize
 
@@ -485,29 +487,28 @@ See the [humanization table](#configuration-1). Off by default.
 |---|---|---|
 | Key mapping | Per-key-count overrides; click a column, then press a key | Read from the site |
 | Use secondary keybind | Press both of a column's bindings when the site has two | Off |
-| Hotkeys | Reconfigurable; warns on collision with a site keybind | Right Shift, G B X Z |
+| Hotkeys | Four reconfigurable action keys; Right Shift is fixed for the panel | Right Shift, G B X Z |
 
 ### Appearance
 
 | Setting | Range | Default |
 |---|---|---|
 | UI scale | 0.6 – 2 | `1` |
-| Opacity | 0.15 – 1 | `0.92` |
+| Opacity | 0.15 – 1 | `1` |
 | Accent colour | `#rgb` / `#rrggbb` | `#ff6b9d` |
-| Position, size, collapsed | Draggable / resizable / collapsible | `16, 16` · `296 px` · expanded |
+| Position, size | Draggable / resizable | `16, 16` · `427 px` |
 
 ## Key mapping
 
 The mapping is read from the site, in this priority order:
 
-1. `game.columnKeybinds` — the bindings already resolved for *this run*.
-2. `game.settings.keybinds.keyModes[keyCount - 1]`.
-3. Your saved per-key-count override.
+1. Your saved per-key-count override, if you explicitly set one.
+2. `game.columnKeybinds` — the bindings resolved for *this run*.
+3. `game.settings.keybinds.keyModes[keyCount - 1]`.
 4. A generated fallback layout.
 
-Reading the live value first is what makes a mid-session rebind work: the site
-deep-clones its settings when a game is constructed, so those are the bindings
-that play is actually using.
+An override must match a key the game accepts for that column. Editing a mapping
+stops an active run before replacing it; **Re-read from site** clears the override.
 
 ```
 4K     Column 1 → D    Column 2 → F    Column 3 → J    Column 4 → K
@@ -516,7 +517,7 @@ that play is actually using.
 ```
 
 Fallback layouts exist for 1K through 10K+; beyond that, extended suffix codes
-are generated. **To change a mapping:** Settings → Input → click a column → press
+are generated. **To change a mapping:** More! → Input → click a column → press
 the key. Overrides are stored per key count, so a 4K override does not affect 7K.
 A `fallback` source means the site's keybinds could not be read — the tool still
 plays, but you should set the mapping manually.
@@ -528,25 +529,21 @@ both, which matters if your own setup expects it.
 
 | Key | Action |
 |---|---|
-| `Right Shift` | Toggle UI (panel ⇄ mini bar ⇄ hidden) |
+| `Right Shift` | Open / close the panel (hidden on page load) |
 | `G` | Start |
 | `B` | Pause / resume |
 | `X` | Stop |
 | `Z` | **Emergency stop** — releases every key immediately, full reset |
 
-The UI toggle defaults to `Right Shift` — a modifier the site never binds to a
-column — and the four action keys are letters chosen from the set that appears
-in *no* column layout at any key count, so a hotkey can never double as a
-column key. All five are reconfigurable in Settings → Input, which opens
-straight onto the Hotkeys section: click a key chip, press the new key (the
-chip glows and reads "press a key…" while listening), `Esc` cancels, and
-**Reset hotkeys to defaults** puts Right Shift / G / B / X / Z back. Binding a
-key that another Keyfall action already uses is refused with a notice. Migration is per key: a stored code that matches an earlier shipped default
-(the F-keys, or the interim H toggle) follows the current default forward, while
-any other stored code is treated as your choice and left alone. The manager only acts on trusted
-events, in the capture phase, and ignores `repeat` and any ctrl/meta/alt
-combination — so a hotkey never also registers as a column hit. If you bind a
-hotkey to a code the site uses as a column keybind, you get a warning.
+The panel shortcut is fixed to `Right Shift`, including when upgrading from an
+older custom UI shortcut. It works while a key binding is being captured or a
+text field has focus. The four action keys remain reconfigurable in More! →
+Input: click a chip, press a key, or press `Esc` to cancel. Right Shift cannot
+be assigned to another action. **Reset action hotkeys** restores G / B / X / Z.
+Other saved custom action keys are preserved when upgrading. The manager accepts
+only trusted, non-repeated key events without ctrl/meta/alt; it warns when an
+action key collides with the game. If the game uses Right Shift as a column,
+change that game binding so it does not conflict with the fixed panel shortcut.
 
 ## Performance
 
@@ -578,7 +575,7 @@ hotkey to a code the site uses as a column keybind, you get a warning.
 
 ## Debugging
 
-Settings → General → **Debug mode**, or `Keyfall.setDebug(true)`.
+More! → Display → **Debug mode**, or `Keyfall.setDebug(true)`.
 
 The panel then shows a structured snapshot, refreshed on the stats loop:
 
@@ -726,10 +723,9 @@ a bug, not a limitation.
 
 ### The UI does not appear
 
-```js
-Keyfall.showUI();          // re-enable the overlay
-Keyfall.uninstall();       // then reload the page to reinitialise cleanly
-```
+Press the physical **Right Shift** key (not Left Shift). The panel starts
+hidden on each page load, and synthetic key events will not open it. If it
+still does not appear, run `Keyfall.uninstall()` and reload the page.
 
 If `window.Keyfall` is undefined, the script did not load — check your userscript
 manager's console for an error, and confirm you are on a recognised host. Loading
@@ -742,13 +738,14 @@ first.
 npm install
 npm run build      # → dist/keyfall.js, dist/keyfall.user.js, dist/bookmarklet*.txt
 npm run watch
-npm test           # 254 unit + integration tests
+npm test           # 274 unit + integration tests
 npm run smoke      # builds, then runs the SHIPPED BUNDLE against a stubbed site
 npm run verify     # typecheck + test + smoke
 npm run demo       # sandbox at http://localhost:5173/
 ```
 
-**Requirements:** Node 20+. Two dev dependencies only — `esbuild` and
+**Requirements:** Node 20+ to build; Node 22.18+ to run the native TypeScript
+tests and `npm run verify`. Two dev dependencies only — `esbuild` and
 `typescript`. The shipped bundle has zero runtime dependencies.
 
 Tests run on `node --test` with Node's native type stripping: no test framework
@@ -812,7 +809,7 @@ rather than add a second scheduler or input path.
 `npm run demo` serves a sandbox containing a stub that implements the documented
 site contract (`demo/stub-game.js`) and the real, unmodified bundle running
 against it. Pick a chart — 4K with holds and chords, a 7K stream, or a 10K map —
-press **Play**, then press **G**.
+press **Play**, press **Right Shift** to open the panel, then press **G** or click **Start autoplay**.
 
 It is a demonstration harness, not a port of the game. It exists so the bundle's
 detection, clock fitting, scheduling, humanization and input paths can be
@@ -827,7 +824,7 @@ exercised end to end without the live site.
 3. **Add a test.** If you changed timing or ordering behaviour, this is not
    optional. The two hardest bugs in this codebase were both invisible in manual
    testing and obvious under the stubbed clock.
-4. **Run `npm run verify`** — typecheck, 254 tests, and the bundle smoke test.
+4. **Run `npm run verify`** — typecheck, 274 tests, and the bundle smoke test.
 5. **Check by hand** against the real site, in this order: a 4K tap-only map, a
    map with holds (including one that ends exactly where the next note on that
    column starts), a dense stream, 7K or higher, pause and resume mid-hold, a
@@ -851,22 +848,22 @@ kilobyte and every global it touches is a cost.
     Look-ahead scheduler on performance.now(), no per-note timers
     Least-squares clock model with seek/stall discrimination
     Reproducible humanization: seeded, drift, fatigue, pattern-aware
-    Overlay UI: draggable, resizable, collapsible, themed, keyboard view
-    Five reconfigurable hotkeys with collision warnings
+    Trainer-style UI: Right Shift only, draggable, resizable, themed, keyboard view
+    Four reconfigurable action hotkeys and a fixed Right Shift panel shortcut
     Locally persisted, validated, clamped settings
     Debug mode with a structured snapshot and buffered log
     Multi-layer stuck-key prevention and safe-stop guarantees
     SPA survival: beatmap change, gameplay close, replay and results screens
     Multi-site Ashtonk!mania adapter, Practice-only fair-play gate
-    254 tests plus a 46-check shipped-bundle smoke test
+    274 tests plus a 57-check shipped-bundle smoke test
     Sandbox demo harness
 
 [ ] Planned
     More timing profiles (presets for practice, sight-read, latency calibration)
     Improved visualisation: per-column error histogram, drift over time
     More statistics: judgement distribution over a run, error trend, NPS over time
-    Additional accessibility options: high-contrast theme, reduced motion,
-        larger hit indicators, remappable-everything audit
+    Additional accessibility options: high-contrast theme, larger hit indicators,
+        and an action-hotkey accessibility audit
     Better chart detection for provider changes and non-.osz sources
     Wider browser verification, including mobile and gamepad-input paths
     Replay export of a humanised run

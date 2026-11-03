@@ -2,7 +2,10 @@ import { DEFAULT_HUMANIZATION } from "./humanize/humanizer";
 import type { Settings } from "./types";
 
 export const NAME = "Keyfall";
-export const VERSION = "1.2.0";
+export const VERSION = "1.3.0";
+
+/** The panel is deliberately available only from the physical Right Shift key. */
+export const UI_TOGGLE_CODE = "ShiftRight";
 
 /** localStorage key for persisted settings. Versioned so we can migrate. */
 export const STORAGE_KEY = "keyfall:settings:v1";
@@ -113,7 +116,8 @@ export const EXTENDED_SUFFIX_CODES = [
 export const DEFAULT_SETTINGS: Settings = {
   general: {
     enabled: true,
-    showOverlay: true,
+    // Legacy persisted flag; panel visibility is now transient and keyboard-only.
+    showOverlay: false,
     showKeyboard: true,
     debug: false,
   },
@@ -135,7 +139,7 @@ export const DEFAULT_SETTINGS: Settings = {
       // EXTENDED_SUFFIX_CODES covers Q W E R T Y U I O P, so a default hotkey
       // can never double as a column key at any key count.
       // Mnemonics: G = go, B = break, X = stop, Z = last resort.
-      toggleUI: "ShiftRight",
+      toggleUI: UI_TOGGLE_CODE,
       start: "KeyG",
       pause: "KeyB",
       stop: "KeyX",
@@ -144,11 +148,11 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   appearance: {
     uiScale: 1,
-    opacity: 0.92,
+    opacity: 1,
     accent: "#ff6b9d",
     position: { x: 16, y: 16 },
     collapsed: false,
-    size: { w: 296, h: 0 },
+    size: { w: 427, h: 0 },
   },
   humanization: { ...DEFAULT_HUMANIZATION },
 };

@@ -101,9 +101,10 @@ structurally typed on purpose, so a rename is a one-file change.
 Keybinds moved out of `settings.keybinds.keyModes`. Two options:
 
 - Update `buildKeyMapping` in `detect/buildContext.ts` to read the new location.
-- Or just configure it manually: overlay → Settings → Input → click a column →
-  press the key. User overrides are persisted and take priority over the
-  fallback (but not over a successful site read).
+- Or just configure it manually: Right Shift → More! → Input → click a column →
+  press the key. User overrides are persisted and take priority over site reads;
+  the chosen code must still match a binding the game accepts. Re-read from
+  site clears the override.
 
 ### Input dispatches but nothing happens
 
@@ -154,7 +155,7 @@ Keyfall.diagnostics().humanization
 - `{ enabled: false }` but timing still looks off — it is not humanization. Check
   `clock` and the Timing Offset instead.
 - `enabled: true` unexpectedly — it persisted from a previous session. Turn it off
-  in Settings → Humanize, or `Keyfall.resetSettings()`.
+  in More! → Humanize, or `Keyfall.resetSettings()`.
 - Same seed gives different runs — that is a bug, not a setting. Determinism is
   tested in `test/humanizer.test.ts`; start with whether `reseed()` is being
   called on rebuild.
@@ -200,7 +201,7 @@ in the adapter's `unsupportedReason`; do not add engine-level exceptions.
 ## Step 4: verify
 
 ```bash
-npm run verify     # typecheck + 254 tests + 46-check shipped-bundle smoke test
+npm run verify     # typecheck + 274 tests + 57-check shipped-bundle smoke test
 ```
 
 If you changed timing or ordering behaviour, add a test. The two bugs that were

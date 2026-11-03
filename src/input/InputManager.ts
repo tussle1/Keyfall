@@ -1,4 +1,5 @@
 import type { InputAction, KeyMapping } from "../types";
+import { lowerBound } from "../util/helpers";
 
 /**
  * Browser keyboard input abstraction.
@@ -212,6 +213,34 @@ export class InputManager {
 
     // chartTime is informational here; per-action times drive the logic.
     void chartTime;
+  }
+
+  /**
+   * After a live timeline/offset change, keep holds that still have an upcoming
+   * release, but immediately release keys whose next action is another press
+   * (or no action at all). Otherwise a moved or removed release can be skipped
+   * by the scheduler's new cursor and leave a key stuck. Deferred tap releases
+   * own their own timer and must not be cut short here.
+   */
+  reconcileHeld(actions: InputAction[], chartTime: number, offset: number): number {
+    const unresolved = new Map<string, HeldEntry>();
+    for (const entry of this.held.values()) {
+      if (entry.releaseHandle === null) unresolved.set(entry.code, entry);
+    }
+    if (unresolved.size === 0) return 0;
+
+    const releaseNow: HeldEntry[] = [];
+    const start = lowerBound(actions, chartTime, (action) => action.time + offset);
+    for (let i = start; i < actions.length && unresolved.size > 0; i++) {
+      const action = actions[i];
+      const entry = unresolved.get(action.code);
+      if (!entry) continue;
+      unresolved.delete(action.code);
+      if (action.type !== "up" || action.column !== entry.column) releaseNow.push(entry);
+    }
+    releaseNow.push(...unresolved.values());
+    for (const entry of releaseNow) this.keyUp(entry.code, entry.column, chartTime);
+    return releaseNow.length;
   }
 
   /* ------------------------- event plumbing ------------------------- */

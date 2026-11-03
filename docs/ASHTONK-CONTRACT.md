@@ -150,7 +150,7 @@ used by the integration test models the same `document -> window` path. No
 
 High-key Ashtonk!mania default layouts can collide with Keyfall's default
 hotkeys (`G`, `B`, `X`, `Z`). `HotkeyManager` surfaces those collisions using the
-adapter's resolved keybinds; rebind the hotkeys in Settings → Input if needed.
+adapter's resolved keybinds; rebind the hotkeys in More! → Input if needed.
 
 ## 6. State and liveness
 
@@ -215,7 +215,7 @@ it is already enabled.
 | Renames / removes `window.AshtonkMania` | `ashtonkGlobal` strategy returns null | Update `ASHTONK_APP_GLOBAL` and `readAshtonkApi()` shape check |
 | Moves `GameplayScreen.s` or its fields | Chart/clock/state readback fails | Update `src/detect/ashtonkAdapter.ts` |
 | Changes `inputTime` / `offsetMs` / `Music` clock | Timing drift | Update `readChartTime()` fallback and the contract above |
-| Moves keybinds out of `Settings.keybinds(keys)` / `s.keyMap` | Mapping falls back | Prefer `s.keyMap`; users can still override in Settings → Input |
+| Moves keybinds out of `Settings.keybinds(keys)` / `s.keyMap` | Mapping falls back | Prefer `s.keyMap`; users can still override in More! → Input |
 | Adds `isTrusted` checks to gameplay input | Synthetic events stop registering | No legitimate fix; guards stop safely |
 | Moves `window` capture listeners to a shadow root or stopped propagation | Document-dispatched events may not reach them | Verify the event path; `InputManager` target may need a site-aware bridge |
 | Changes note shape from `{ col, time, end, isLN }` | Chart parse fails | Update `readHitObjects()` |

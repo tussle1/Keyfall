@@ -42,11 +42,11 @@ export function readKeyCount(game: GameLike): number | null {
  * Build a `keyCount -> code[]` mapping.
  *
  * Priority:
- *  1. The live game's resolved `columnKeybinds` (exact — includes the user's
- *     own rebinds and the deep-cloned settings for that specific run).
- *  2. The game's cloned settings `keybinds.keyModes[keyCount - 1]`.
- *  3. A user override from settings.
- *  4. The built-in fallback layout.
+ *  1. An explicit user override from Keyfall's settings.
+ *  2. The live game's resolved `columnKeybinds`.
+ *  3. The game's cloned settings `keybinds.keyModes[keyCount - 1]`.
+ *  4. The built-in fallback layout. An override must correspond to bindings
+ *     accepted by the site; use "Re-read from site" to remove it.
  */
 export function buildKeyMapping(
   game: GameLike | null,
@@ -57,7 +57,14 @@ export function buildKeyMapping(
     return { codes: [], keyCount, source: "fallback" };
   }
 
-  // 1. Live resolved keybinds on the game instance.
+  // A deliberate override must take precedence or the mapping editor would
+  // display a change while the engine silently continued using the old keys.
+  const override = settings?.input?.keyMappings?.[String(keyCount)];
+  if (Array.isArray(override) && override.length === keyCount) {
+    return { codes: [...override], keyCount, source: "user" };
+  }
+
+  // 2. Live resolved keybinds on the game instance.
   const live = game?.columnKeybinds;
   if (Array.isArray(live) && live.length === keyCount) {
     const codes = live.map((pair) => pair?.[0] ?? null);
@@ -66,7 +73,7 @@ export function buildKeyMapping(
     }
   }
 
-  // 2. Cloned settings on the game instance.
+  // 3. Cloned settings on the game instance.
   const keyModes = game?.settings?.keybinds?.keyModes;
   if (Array.isArray(keyModes)) {
     const mode = keyModes[keyCount - 1];
@@ -76,12 +83,6 @@ export function buildKeyMapping(
         return { codes: codes as string[], keyCount, source: "site" };
       }
     }
-  }
-
-  // 3. User override.
-  const override = settings.input.keyMappings[String(keyCount)];
-  if (Array.isArray(override) && override.length === keyCount) {
-    return { codes: [...override], keyCount, source: "user" };
   }
 
   // 4. Fallback layout.

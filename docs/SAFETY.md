@@ -144,11 +144,11 @@ breaks the run, and can persist into the next screen. Defences, in layers:
 | A replay is playing | Refuses to start; the site's `ReplayPlayer` / `s.feed` already drives input |
 | Ashtonk!mania normal, ranked, multiplayer or daily play | Refuses with a Practice-mode notice rather than submitting an automated score |
 | Ashtonk!mania Wind Up / Wind Down / Adaptive Speed | Refuses; those mods change the clock non-linearly and Keyfall's clock model is linear |
-| Ashtonk!mania high-key layout collides with `G`/`B`/`X`/`Z` hotkeys | Collision warning is surfaced; rebind the hotkeys in Settings → Input |
+| Ashtonk!mania high-key layout collides with `G`/`B`/`X`/`Z` hotkeys | Collision warning is surfaced; rebind the hotkeys in More! → Input |
 | Beatmap fails to download | No chart detected; overlay reports it, no input is produced |
 | Keybind changed mid-run | Desync verifier stops the run rather than playing the wrong columns |
 | Tab backgrounded mid-hold | Keys released, engine paused, resumes on return |
 | Two columns bound to the same key | Duplicate presses are counted and surfaced in diagnostics instead of double-firing |
 | Humanization shifts a hold's tail past the next press | Clamped during `prepare()`: the release ceiling is the next same-column press, and letting go early is always allowed |
 | Humanization spreads a chord apart | Impossible by construction: one delta per timestamp, shared by every note in the chord |
-| A humanization setting changes mid-run | The timeline is rebuilt and reloaded from the current playhead, reproducibly from the same seed |
+| A timing or humanization setting changes mid-run | The scheduler updates from the current playhead. Holds with a future release remain held; any release moved behind the playhead is sent immediately |

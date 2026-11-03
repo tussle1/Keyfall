@@ -21,6 +21,10 @@ const root = resolve(here, "..");
 const watch = process.argv.includes("--watch");
 
 const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
+// Embed the original cover artwork: the userscript remains a single file and
+// does not depend on another host (or the game's own artwork URLs).
+const cover = await readFile(resolve(root, "assets/trainer-cover.jpg"));
+const coverData = `data:image/jpeg;base64,${cover.toString("base64")}`;
 
 const USERSCRIPT_HEADER = `// ==UserScript==
 // @name         Keyfall
@@ -58,6 +62,7 @@ const baseOptions = {
   legalComments: "none",
   logLevel: "info",
   tsconfig: resolve(root, "tsconfig.json"),
+  define: { __KEYFALL_COVER__: JSON.stringify(coverData) },
 };
 
 await mkdir(resolve(root, "dist"), { recursive: true });

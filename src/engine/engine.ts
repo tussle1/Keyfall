@@ -5,6 +5,7 @@ import {
 } from "../detect/pixiHook";
 import {
   buildContextFromGame,
+  buildKeyMapping,
   buildSecondaryMapping,
 } from "../detect/buildContext";
 import { detectSite, NOT_DETECTED_MESSAGE, type SiteCheck } from "../detect/siteDetection";
@@ -124,6 +125,8 @@ export class Engine {
 
   /** Consecutive failed input-state verifications. */
   private desyncCount = 0;
+  /** Only a pause caused by the game should auto-resume with the game. */
+  private pausedBySite = false;
   private static readonly DESYNC_LIMIT = 6;
 
   private lastError = "";
@@ -165,7 +168,9 @@ export class Engine {
       {
         releaseAll: () => this.input.releaseAll(),
         onPanic: (reason) => this.safeStop(reason),
-        isGameAlive: () => this.isGameAlive(),
+        // No game during song select is normal; only an active run needs the
+        // liveness watchdog to panic when gameplay disappears.
+        isGameAlive: () => (this.phase !== "RUNNING" && this.phase !== "PAUSED") || this.isGameAlive(),
         chartTime: () => (Number.isFinite(this.chartTime()) ? this.chartTime() : null),
         heldColumns: () => this.input.heldColumns,
         heldSince: () => this.heldSinceChart(),
@@ -237,6 +242,10 @@ export class Engine {
   /** Start autoplay on the detected chart. */
   start(): void {
     if (this.disposed) return;
+    if (!this.settingsManager.all.general.enabled) {
+      this.log("warn", "Autoplay is disabled. Enable it in the Keyfall panel first.");
+      return;
+    }
 
     if (this.phase === "PAUSED") {
       this.resume();
@@ -287,6 +296,7 @@ export class Engine {
   pause(): void {
     if (this.disposed || this.phase !== "RUNNING") return;
 
+    this.pausedBySite = false;
     this.scheduler.pause();
     // Release held keys so nothing sticks while paused. Chart position is
     // preserved: `resume()` rebases the cursor against the live clock.
@@ -297,12 +307,20 @@ export class Engine {
 
   /** Resume from the correct timing position. */
   resume(): void {
-    if (this.disposed || this.phase !== "PAUSED") return;
+    if (this.disposed || this.phase !== "PAUSED" || !this.settingsManager.all.general.enabled) return;
 
     if (!this.isGameAlive()) {
       this.safeStop("Gameplay ended while paused");
       return;
     }
+    if (this.game?.state === "PAUSE" || this.game?.state === "UNPAUSE") {
+      // The user asked to resume, but the game still has its own pause open.
+      // Resume automatically when the site's countdown finishes.
+      this.pausedBySite = true;
+      this.log("info", "waiting for the game to resume");
+      return;
+    }
+    this.pausedBySite = false;
 
     // The site may have been paused too; re-read the clock before rebasing.
     this.clock.reset();
@@ -334,6 +352,7 @@ export class Engine {
     this.clock.hardReset();
     this.desyncCount = 0;
     this.timeline = null;
+    this.pausedBySite = false;
     this.setPhase("IDLE");
     this.lastError = "";
     this.emitter.emit("phase", { phase: "IDLE", reason });
@@ -356,10 +375,19 @@ export class Engine {
 
   /** Apply a settings change to the live engine. */
   applySettings(settings: Settings): void {
+    // The master switch is a real safety control, not just a cosmetic toggle.
+    // Disabling it during a run must immediately stop and release every key.
+    if (!settings.general.enabled && (this.phase === "RUNNING" || this.phase === "PAUSED")) {
+      this.stop();
+      this.log("info", "autoplay disabled — keys released");
+    }
     this.scheduler.setOptions(settings.timing.lookahead, settings.timing.spinThreshold);
     // Applied whether or not a run is active, so a mid-run slider drag takes
     // effect on the next note rather than the next session.
-    this.scheduler.setActionOffset(this.effectiveOffset(settings));
+    const offset = this.effectiveOffset(settings);
+    const offsetChanged = offset !== this.scheduler.actionTimeOffset;
+    this.scheduler.setActionOffset(offset);
+    let timelineReloaded = false;
     if (this.keyMapping) {
       this.input.setMapping(this.keyMapping, this.secondaryCodes);
     }
@@ -378,10 +406,11 @@ export class Engine {
       this.lastTimelineHumanization = humanizationSignature(settings);
       try {
         this.buildTimeline();
-        if (this.phase === "RUNNING" && this.timeline) {
-          // Reload from the current playhead so notes already behind us are not
-          // replayed and notes ahead pick up the new timing immediately.
+        if ((this.phase === "RUNNING" || this.phase === "PAUSED") && this.timeline) {
+          // Reload from the current playhead so upcoming notes pick up the new
+          // settings, including changes made while manually paused.
           this.scheduler.load(this.timeline.actions, this.chartTime());
+          timelineReloaded = true;
         }
         const rebuilt = this.timeline!;
         this.emitter.emit("timeline", {
@@ -391,6 +420,35 @@ export class Engine {
       } catch (err) {
         this.log("error", `timeline rebuild failed: ${(err as Error).message}`);
       }
+    }
+    if (this.phase === "RUNNING" && this.timeline && (offsetChanged || timelineReloaded)) {
+      const released = this.input.reconcileHeld(this.timeline.actions, this.chartTime(), offset);
+      if (released) this.log("info", `released ${released} key(s) whose release moved behind the playhead`);
+    }
+  }
+
+  /** Apply a mapping edit immediately, even when the chart itself is unchanged. */
+  refreshMapping(): void {
+    if (this.disposed) return;
+    if (!this.game || !this.chart || !this.isGameAlive()) {
+      this.tryDetect();
+      return;
+    }
+    // Never swap key identities underneath an active hold.
+    if (this.phase === "RUNNING" || this.phase === "PAUSED") this.stop();
+    this.keyMapping = buildKeyMapping(this.game, this.chart.keyCount, this.settingsManager.all);
+    this.secondaryCodes = buildSecondaryMapping(this.game, this.chart.keyCount);
+    this.input.setMapping(this.keyMapping, this.secondaryCodes);
+    try {
+      this.buildTimeline();
+      this.emitter.emit("detected", {
+        chart: this.chart,
+        keyMapping: this.keyMapping,
+        analysis: this.timeline!.analysis,
+        via: this.detectedVia,
+      });
+    } catch (err) {
+      this.fail(`Mapping update failed: ${(err as Error).message}`);
     }
   }
 
@@ -674,6 +732,10 @@ export class Engine {
 
   private onFire(actions: InputAction[], _hostNow: number, targetChartTime: number): void {
     if (this.phase !== "RUNNING") return;
+    if (!this.settingsManager.all.general.enabled) {
+      this.stop();
+      return;
+    }
     if (!this.isGameAlive()) {
       const policy = this.game?.unsupportedReason;
       this.safeStop(
@@ -689,6 +751,7 @@ export class Engine {
       if (game.state === "PAUSE" || game.state === "UNPAUSE") {
         this.input.releaseAll();
         this.scheduler.pause();
+        this.pausedBySite = true;
         this.setPhase("PAUSED");
         this.log("info", "site paused — autoplay paused");
       } else if (game.state === "FAIL") {
@@ -833,10 +896,11 @@ export class Engine {
       if (this.phase === "RUNNING") {
         this.input.releaseAll();
         this.scheduler.pause();
+        this.pausedBySite = true;
         this.setPhase("PAUSED");
         this.log("info", "site paused — autoplay paused");
       }
-    } else if (state === "PLAY" && this.phase === "PAUSED" && this.game) {
+    } else if (state === "PLAY" && this.phase === "PAUSED" && this.pausedBySite && this.game) {
       // The site resumed on its own (e.g. the user unpaused in-game).
       this.resume();
     }
@@ -956,6 +1020,7 @@ export class Engine {
     this.stopStatsLoop();
     this.stopStateMonitor();
     this.desyncCount = 0;
+    this.pausedBySite = false;
     this.log("info", `run torn down: ${reason}`);
   }
 

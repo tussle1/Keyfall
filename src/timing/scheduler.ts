@@ -234,6 +234,11 @@ export class Scheduler {
 
   /** Load a timeline. Resets cursor and counters. */
   load(actions: InputAction[], startFromChartTime?: number): void {
+    // Live setting changes can replace the timeline while a timer is armed.
+    // Cancel and invalidate it before changing action indexes, so it cannot
+    // block or fire a batch from the old timeline.
+    this.clearArmed();
+    this.epoch++;
     this.actions = actions;
     const offset = this.actionOffset;
     this.cursor =

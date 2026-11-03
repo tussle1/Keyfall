@@ -305,6 +305,22 @@ describe("Scheduler", () => {
     assert.ok(h.scheduler.droppedCount > 0, "should count dropped actions");
   });
 
+  it("cancels an armed batch when the live timeline is replaced", () => {
+    const h = harness();
+    h.scheduler.load([act(0, 1000, "down")], 0);
+    h.setChart(0);
+    h.scheduler.start();
+    h.advance(900, 5);
+    assert.equal(h.pendingTasks, 1, "the old note is armed");
+
+    h.scheduler.load([act(1, 950, "down")], h.chart);
+    assert.equal(h.pendingTasks, 0, "the old timer was canceled");
+    h.advance(75, 5);
+    assert.deepEqual(h.fired.flatMap((batch) => batch.actions.map((action) => action.seq)), [1]);
+    assert.ok(h.fired[0].hostNow <= 955, "the new earlier note was not delayed by the old timer");
+    h.scheduler.dispose();
+  });
+
   it("stop clears the timeline and cancels timers", () => {
     const h = harness();
     h.scheduler.load([act(0, 100, "down"), act(1, 200, "down")], 0);

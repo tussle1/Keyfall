@@ -949,3 +949,116 @@ describe("humanization end to end", () => {
     fake.dispose();
   });
 });
+
+describe("interactive controls and guards", () => {
+  it("does not report a gameplay failure while simply waiting in song select", () => {
+    const settings = new SettingsManager(undefined, env.window);
+    const engine = new Engine({ settings, win: env.window });
+    engine.init();
+    env.advance(3500);
+    assert.equal(engine.currentPhase, "DETECTING");
+    assert.equal(engine.lastErrorMessage, "");
+    engine.dispose(); settings.dispose();
+  });
+
+  it("keeps a manual pause until resumed, but follows a site-originated pause", () => {
+    const fake = createFakeGame({ hitObjects: [tap(0, 2000), tap(1, 4000)] });
+    const settings = new SettingsManager(undefined, env.window);
+    const engine = new Engine({ settings, win: env.window });
+    engine.init(); engine.start(); engine.pause();
+    env.advance(600);
+    assert.equal(engine.currentPhase, "PAUSED", "a running site must not undo a manual pause");
+    engine.resume();
+    assert.equal(engine.currentPhase, "RUNNING");
+    fake.game.state = "PAUSE";
+    env.advance(150);
+    assert.equal(engine.currentPhase, "PAUSED");
+    fake.game.state = "PLAY";
+    env.advance(150);
+    assert.equal(engine.currentPhase, "RUNNING", "a site-caused pause follows the site's resume");
+    engine.dispose(); settings.dispose(); fake.dispose();
+  });
+
+  it("the autoplay switch stops and releases a live hold, and blocks starts while off", () => {
+    const fake = createFakeGame({ hitObjects: [hold(0, 1000, 8000)] });
+    const settings = new SettingsManager(undefined, env.window);
+    const engine = new Engine({ settings, win: env.window });
+    engine.init(); engine.start();
+    for (let t = 0; t <= 1200; t += 16) {
+      fake.game.timeElapsed = t; env.advance(16); env.frame();
+    }
+    assert.equal(fake.pressedColumns[0], true);
+    settings.set("general.enabled", false);
+    engine.applySettings(settings.all);
+    assert.deepEqual(fake.pressedColumns, [false, false, false, false]);
+    assert.equal(engine.currentPhase, "READY");
+    engine.start();
+    assert.equal(engine.currentPhase, "READY", "disabled autoplay cannot start");
+    settings.set("general.enabled", true);
+    engine.applySettings(settings.all); engine.start();
+    assert.equal(engine.currentPhase, "RUNNING");
+    engine.dispose(); settings.dispose(); fake.dispose();
+  });
+
+  it("releases only the hold whose end moved behind the playhead when timing changes", () => {
+    const fake = createFakeGame({ hitObjects: [hold(0, 1000, 1300), hold(1, 1000, 3000)] });
+    const settings = new SettingsManager(undefined, env.window);
+    const engine = new Engine({ settings, win: env.window });
+    engine.init(); engine.start();
+    for (let t = 0; t <= 1200; t += 16) {
+      fake.game.timeElapsed = t; env.advance(16); env.frame();
+    }
+    assert.deepEqual(fake.pressedColumns, [true, true, false, false]);
+    settings.set("timing.offset", -200);
+    engine.applySettings(settings.all);
+    assert.deepEqual(fake.pressedColumns, [false, true, false, false], "keep the hold with a future release");
+    for (let t = 1216; t <= 3100; t += 16) {
+      fake.game.timeElapsed = t; env.advance(16); env.frame();
+    }
+    assert.deepEqual(fake.pressedColumns, [false, false, false, false]);
+    engine.dispose(); settings.dispose(); fake.dispose();
+  });
+
+  it("applies secondary-key changes made while autoplay is paused", () => {
+    const fake = createFakeGame({ hitObjects: [tap(0, 1000), tap(1, 2000)] });
+    fake.game.columnKeybinds![0] = ["KeyD", "KeyQ"];
+    const observed: string[] = [];
+    const record = (event: any) => { if (event.type === "keydown") observed.push(event.code); };
+    env.document.addEventListener("keydown", record);
+    const settings = new SettingsManager(undefined, env.window);
+    const engine = new Engine({ settings, win: env.window });
+    engine.init(); engine.start(); engine.pause();
+    settings.set("input.useSecondaryKeybind", true);
+    engine.applySettings(settings.all);
+    engine.resume();
+    for (let t = 0; t <= 1300; t += 16) {
+      fake.game.timeElapsed = t; env.advance(16); env.frame();
+    }
+    assert.ok(observed.includes("KeyD"));
+    assert.ok(observed.includes("KeyQ"), "the rebuilt timeline is used after resume");
+    env.document.removeEventListener("keydown", record);
+    engine.dispose(); settings.dispose(); fake.dispose();
+  });
+
+  it("applies a user mapping immediately, safely stops holds, and can restore the site mapping", () => {
+    const fake = createFakeGame({ hitObjects: [hold(0, 1000, 8000)] });
+    const settings = new SettingsManager(undefined, env.window);
+    const engine = new Engine({ settings, win: env.window });
+    engine.init(); engine.start();
+    for (let t = 0; t <= 1200; t += 16) {
+      fake.game.timeElapsed = t; env.advance(16); env.frame();
+    }
+    assert.equal(fake.pressedColumns[0], true);
+    settings.set("input.keyMappings.4", ["KeyQ", "KeyF", "KeyJ", "KeyK"]);
+    engine.refreshMapping();
+    assert.equal(engine.currentPhase, "READY");
+    assert.deepEqual(fake.pressedColumns, [false, false, false, false]);
+    assert.equal(engine.currentMapping?.source, "user");
+    assert.equal(engine.currentMapping?.codes[0], "KeyQ");
+    settings.set("input.keyMappings", {});
+    engine.refreshMapping();
+    assert.equal(engine.currentMapping?.source, "site");
+    assert.equal(engine.currentMapping?.codes[0], "KeyD");
+    engine.dispose(); settings.dispose(); fake.dispose();
+  });
+});
