@@ -150,6 +150,7 @@ export class Overlay {
   private expanded = false;
   private visible = false;
   private phase: EnginePhase = "IDLE";
+  private pendingStart = false;
   private chart: ParsedChart | null = null;
   private mapping: KeyMapping | null = null;
   private mappingSignature = "";
@@ -292,7 +293,11 @@ export class Overlay {
     this.root.appendChild(this.panel);
     this.disposers.push(
       listen(stopBtn, "click", () => this.host.onStop()),
-      listen(this.startBtn, "click", () => this.phase === "RUNNING" ? this.host.onPause() : this.host.onStart()),
+      listen(this.startBtn, "click", () => {
+        if (this.phase === "RUNNING") this.host.onPause();
+        else if (this.pendingStart) this.host.onStop();
+        else this.host.onStart();
+      }),
       listen(this.emergencyBtn, "click", () => this.host.onEmergency()),
       listen(this.moreBtn, "click", () => this.setExpanded(!this.expanded)),
     );
@@ -306,6 +311,8 @@ export class Overlay {
         el("div", { className: "wom-section-title", text: "Timing & scheduler" }),
         el("p", { className: "wom-help", text: "Fine-tune the same controls above. Offset changes take effect while playing." }),
         ...TIMING_SLIDERS.map((spec) => this.sliderRow({ ...spec, wide: true })),
+        this.switchRow("Auto-start detected charts", "general.autoStart", (s) => s.general.autoStart),
+        el("p", { className: "wom-help", text: "When enabled, autoplay starts on each new playable chart. You can also press Start before a chart loads." }),
         el("p", { className: "wom-help", text: "Negative offset plays earlier. Higher spin windows can improve precision but cost more CPU." }),
       );
       return;
@@ -670,7 +677,8 @@ export class Overlay {
       }
       this.cancelListen();
     };
-    this.listenDisposer = listen(document, "keydown", onKey as EventListener, { capture: true });
+    // Ashtonk handles and stops lane keys on window capture, before document.
+    this.listenDisposer = listen(window, "keydown", onKey as EventListener, { capture: true });
   }
 
   private cancelListen(): void {
@@ -821,9 +829,16 @@ export class Overlay {
   setPhase(phase: EnginePhase, reason?: string): void {
     this.phase = phase;
     setDataset(this.statusValue, "phase", phase);
-    setText(this.statusValue, phase);
+    setText(this.statusValue, this.pendingStart ? "ARMED" : phase);
     if (phase === "ERROR" && reason) this.setNotice("error", reason);
     else if ((phase === "READY" || phase === "RUNNING") && this.noticeEl.dataset.kind === "error") this.clearNotice();
+    this.updateButtonStates();
+  }
+
+  /** Reflect a queued start even while the engine remains READY/DETECTING. */
+  setPendingStart(pending: boolean): void {
+    this.pendingStart = pending;
+    setText(this.statusValue, pending ? "ARMED" : this.phase);
     this.updateButtonStates();
   }
 
@@ -832,10 +847,14 @@ export class Overlay {
     const running = this.phase === "RUNNING";
     const paused = this.phase === "PAUSED";
     setDisabled(this.startBtn, !enabled);
-    this.startBtn.title = enabled ? (running ? "Pause autoplay" : "Start Keyfall's own autoplay") : "Enable autoplay first";
-    setText(this.startLabel, running ? "Pause autoplay" : paused ? "Resume autoplay" : "Start autoplay");
-    const code = running ? this.settingsManager.all.input.hotkeys.pause : this.settingsManager.all.input.hotkeys.start;
-    setText(this.startHint, `${humanizeCode(code)} · ${running ? "pause" : paused ? "resume" : "start"}`);
+    this.startBtn.title = !enabled ? "Enable autoplay first"
+      : running ? "Pause autoplay"
+      : this.pendingStart ? "Cancel the queued start"
+      : "Start Keyfall's own autoplay";
+    setText(this.startLabel, running ? "Pause autoplay" : this.pendingStart ? "Cancel queued start" : paused ? "Resume autoplay" : "Start autoplay");
+    const hotkeys = this.settingsManager.all.input.hotkeys;
+    const code = running ? hotkeys.pause : this.pendingStart ? hotkeys.stop : hotkeys.start;
+    setText(this.startHint, `${humanizeCode(code)} · ${running ? "pause" : this.pendingStart ? "cancel" : paused ? "resume" : "start"}`);
   }
 
   setChart(chart: ParsedChart | null, analysis: ChartAnalysis | null, mapping: KeyMapping | null): void {

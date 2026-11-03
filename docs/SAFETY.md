@@ -4,9 +4,9 @@
 
 Browser-side gameplay automation for supported browser rhythm games running in
 your own browser tab. It reads the chart the page has already loaded and
-dispatches ordinary DOM `KeyboardEvent`s on `document`. On Ashtonk!mania it is
-limited to **Practice mode**; ranked, multiplayer, daily, replay, spectate and
-Auto/AT modes are refused.
+dispatches ordinary DOM `KeyboardEvent`s on `document`. On Ashtonk!mania it can
+drive normal, Practice, multiplayer, daily and variable-speed gameplay, but
+refuses replay, spectate and Auto/AT feeds that do not accept gameplay keys.
 
 It is built entirely from standard, publicly documented browser APIs:
 `addEventListener`, `dispatchEvent`, `KeyboardEvent`, `performance.now`,
@@ -28,9 +28,9 @@ position Keyfall occupies:
 - **No credential or cookie access.** `document.cookie` is never read. No
   storage belonging to the site is read or written; the tool's own settings live
   under a single namespaced `localStorage` key.
-- **No account manipulation or score submission.** Nothing submits forms, calls
-  authenticated endpoints, calls `Verified.submit`, or mutates site state. The
-  Ashtonk!mania adapter refuses any mode that would submit a ranked/online score.
+- **No direct account or score-submission calls.** Keyfall does not submit forms,
+  call authenticated endpoints or call `Verified.submit`. It does send gameplay
+  input, and the game may save or submit the resulting play through its own flow.
 - **No network modification.** The `.osz` sniffer is strictly read-only:
   responses are `clone()`d and observed, requests are never altered, blocked,
   delayed or replayed.
@@ -51,27 +51,21 @@ adversarial capability.
 
 ## Fair play
 
-Web osu!mania's original design kept **local** high scores. Ashtonk!mania, by
-contrast, has ranked, multiplayer and daily-challenge leaderboards with
-server-side verification. That difference is why the Ashtonk!mania adapter is
-**Practice-mode only**: normal/ranked play, multiplayer, daily challenges,
-replays, spectating and the site's `AT` Auto mod are all refused before any
-input is produced. Practice plays do not call `Verified.submit`.
+Ashtonk!mania has ranked, multiplayer and daily-challenge leaderboards. Since
+Keyfall now drives those normal input paths, **the game may submit an automated
+play through its own score flow**, even though Keyfall does not call submission
+APIs. The offline tests do not establish whether a server would accept a play.
+Follow the site's rules: do not submit or claim automated leaderboard scores as
+your own, and do not use humanization to make an automated score look legitimate.
 
 Both supported sites ship their own Autoplay/Auto feature. If you simply want
 to watch a map played perfectly using the developer's sanctioned feature, use
 that instead. Keyfall explicitly refuses to run while either built-in Auto mod
 is enabled, and never calls `generateAutoReplay` or `generateAutoInputs`.
-
-If Web osu!mania adds — or already has on a particular deployment — ranked or
-shared leaderboards, submitting an automated score would be cheating and would
-also be trivially detectable via `isTrusted`. Do not do it. Do not use
-humanization to try to make an automated Ashtonk!mania score look legitimate;
-the practice-only gate exists so that question never arises.
+Replay and spectate feeds are also incompatible with keyboard gameplay input.
 
 Use this for practice reference, pattern study, testing your own charts,
-accessibility, or watching a map you cannot yet play. Do not use it to claim a
-score as your own.
+accessibility, or watching a map you cannot yet play.
 
 ## Humanization is not evasion
 
@@ -94,9 +88,9 @@ evasion would want: two runs with the same seed produce byte-identical timing.
 That is a deliberate trade. Reproducibility is what makes a humanized run
 comparable, debuggable and worth studying; anything else would be noise.
 
-Ranked/shared leaderboards already exist on Ashtonk!mania, which is precisely
-why a humanized Keyfall run is never submitted there. A humanized run would be
-no more legitimate than a frame-exact one, and no harder to detect.
+Ranked/shared leaderboards exist on Ashtonk!mania. A humanized run would be no
+more legitimate than a precise automated one, and no harder to detect; the game
+may submit it if a submitting mode is used.
 
 ## Runtime safety
 
@@ -116,9 +110,8 @@ breaks the run, and can persist into the next screen. Defences, in layers:
    column has been held against the chart clock, and force-releases past
    `STUCK_KEY_TIMEOUT`.
 4. **Lifecycle listeners**: `visibilitychange`, `pagehide`, `beforeunload` and
-   `blur` all release keys. A backgrounded tab gets throttled timers, which
-   would wreck scheduling, so the engine pauses and releases rather than
-   firing late.
+   `blur` all release keys. A hidden tab gets throttled timers, so visibility
+   loss triggers a safe stop rather than continuing to fire late.
 5. **Input-state verification**: after dispatching, our held set is compared
    against the site's own `inputSystem.pressedColumns`. A persistent mismatch
    means the keybinds changed underneath us, so the engine stops instead of
@@ -142,12 +135,14 @@ breaks the run, and can persist into the next screen. Defences, in layers:
 | `random` mod enabled | Live-game path works. The `.osu` fallback path refuses, because the column permutation is generated at runtime and never persisted |
 | Site's Autoplay / `AT` mod enabled | Refuses to start, with a message telling you to disable it |
 | A replay is playing | Refuses to start; the site's `ReplayPlayer` / `s.feed` already drives input |
-| Ashtonk!mania normal, ranked, multiplayer or daily play | Refuses with a Practice-mode notice rather than submitting an automated score |
-| Ashtonk!mania Wind Up / Wind Down / Adaptive Speed | Refuses; those mods change the clock non-linearly and Keyfall's clock model is linear |
+| Ashtonk!mania normal, ranked, multiplayer or daily play | The game may submit the play; server acceptance is untested. Do not claim an automated leaderboard score |
+| Ashtonk!mania changing playback speed | The scheduler retargets using the current judgement clock; abrupt changes or a blocked main thread can still cause timing errors |
 | Ashtonk!mania high-key layout collides with `G`/`B`/`X`/`Z` hotkeys | Collision warning is surfaced; rebind the hotkeys in More! → Input |
+| A prepared chart closes, is replaced or has an incompatible feed before starting | Its pending manual start is canceled; auto-start can arm the next valid chart only if enabled |
+| The loader returns or the live chart changes during a run | Keys are released; stale chart input is blocked while the engine pauses or rebuilds |
 | Beatmap fails to download | No chart detected; overlay reports it, no input is produced |
 | Keybind changed mid-run | Desync verifier stops the run rather than playing the wrong columns |
-| Tab backgrounded mid-hold | Keys released, engine paused, resumes on return |
+| Tab backgrounded mid-hold | Keys released and engine safely stopped; restart explicitly after returning |
 | Two columns bound to the same key | Duplicate presses are counted and surfaced in diagnostics instead of double-firing |
 | Humanization shifts a hold's tail past the next press | Clamped during `prepare()`: the release ceiling is the next same-column press, and letting go early is always allowed |
 | Humanization spreads a chord apart | Impossible by construction: one delta per timestamp, shared by every note in the chord |

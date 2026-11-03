@@ -66,7 +66,9 @@ playback.
 `GameplayScreen.loaderGone` gates input (`src/js/15-screen-gameplay.js` lines
 around 261, 385, 671, 692 and 1451). `onKeyDown` also requires
 `Screens.current === GameplayScreen`, no overlay, `s`, `loaderGone`, `!e.repeat`,
-`s.running` and `!s.feed`.
+`s.running` and `!s.feed`. Once `s.engine.notes` is prepared, Keyfall can acquire
+the session *during* the loader and expose it as `WAIT`; it does not send
+keyboard input until the game enters `PLAY`.
 
 ## 3. Chart shape
 
@@ -91,9 +93,10 @@ otherwise            →  { type: "tap",  column: col, time, endTime: time }
 
 Ashtonk!mania does **not** store a separate duplicate hold-head tap, so the
 timeline's WOM hold-head pre-pass is harmless. `chartSignature` hashes the note
-layout plus `s.rec.hash`, key count, mods, seed, rate, practice loop points and
-the identity of `s.engine`; this makes `random` retries and practice seeks
-rebuild the timeline even when note count and start/end times are unchanged.
+layout plus `s.rec.hash`, key count, mods, seed, practice loop points and the
+identity of `s.engine`; this makes `random` retries and practice seeks rebuild
+the timeline even when note count and start/end times are unchanged. The mutable
+playback rate is intentionally *not* part of chart identity.
 
 ## 4. Chart clock
 
@@ -123,16 +126,26 @@ method when available; the fallback reproduces the same formula using
 DT/HT changes `s.rate`, because `Music.timeAt*` already returns rate-scaled map
 time.
 
-Non-linear rate mods (`s.ramp` / `s.adaptive`, i.e. Wind Up / Wind Down /
-Adaptive Speed) are refused: Keyfall's `ClockMapper` fits a linear
-`chart = slope × host + intercept`.
+For a prepared Ashtonk session, `chartTimeAtHost(host)` calls the same
+`inputTime` mapping with an arbitrary event timestamp. The shared engine samples
+it at the current host time and 100 ms ahead to estimate the current slope;
+the scheduler retargets an armed batch on each frame and rechecks whether it
+is actually due before firing. This supports changing rates such as Wind Up,
+Wind Down and Adaptive Speed without treating each rate change as a new chart.
+If the site method is unavailable, the engine falls back to the sliding linear
+`ClockMapper`. CPU stalls, throttled timers and abrupt rate changes still limit
+accuracy; no JavaScript scheduler can dispatch while the main thread is blocked.
 
 ## 5. Keybinds and input path
 
 `Settings.keybinds(keys)` returns one code array per column. `s.keyMap` is the
-actual `code -> column` map used by `onKeyDown`. Gamepad codes (`PadN` / `🎮…`)
-are filtered out because Keyfall dispatches keyboard events. Missing or renamed
-`Settings.keybinds` falls back to `s.keyMap`.
+actual `code -> column` map used by `onKeyDown` and takes precedence over saved
+settings. Gamepad codes (`PadN` / `🎮…`) are filtered out because Keyfall
+dispatches keyboard events; `Escape`, `Backquote`, `Tab`, `F3` and `F4` are
+also skipped because the game consumes them before checking its lane map. If an
+active map has no usable keyboard binding for a lane, the adapter reports the
+missing lane instead of guessing. Explicit Keyfall overrides still must match
+the game's own binding.
 
 `GameplayScreen.enter()` installs `window` **capture** `keydown` / `keyup`
 listeners. A press:
@@ -150,7 +163,11 @@ used by the integration test models the same `document -> window` path. No
 
 High-key Ashtonk!mania default layouts can collide with Keyfall's default
 hotkeys (`G`, `B`, `X`, `Z`). `HotkeyManager` surfaces those collisions using the
-adapter's resolved keybinds; rebind the hotkeys in More! → Input if needed.
+adapter's resolved keybinds; rebind the action hotkeys in More! → Input. Keyfall
+listens on `window` capture so it can receive emergency stop even when the game
+stops propagation. If Keyfall was injected *after* the game listener, that
+listener may still see a colliding physical key first; avoiding collisions is
+safer. Right Shift is reserved for the panel and cannot be rebound.
 
 ## 6. State and liveness
 
@@ -158,7 +175,7 @@ The adapter maps the live session to `SiteGameState`:
 
 | State | Condition |
 |---|---|
-| `PLAY` | gameplay screen, `loaderGone`, `s.running`, no feed, not failed/finished, supported Practice mode |
+| `PLAY` | gameplay screen, `loaderGone`, `s.running`, no feed, not failed/finished |
 | `WAIT` | gameplay screen but the loader has not finished |
 | `PAUSE` / `UNPAUSE` | loader finished, `s.running === false`; `UNPAUSE` when a countdown element is present |
 | `FAIL` | `s.failed`, `s.finished`, screen left, or an unsupported mode |
@@ -183,28 +200,52 @@ combo, score, maxCombo → plain numbers
 `inputSystem.pressedColumns` is `s.held`, so `verifyInputState()` can detect a
 keybind mismatch or a synthetic input path breaking.
 
-## 8. Fair-play gates
+## 8. Feed conflicts and score submission
 
-Ashtonk!mania has ranked, multiplayer and daily-challenge leaderboards. The
-adapter returns `unsupportedReason` (and `state: "FAIL"`) for:
+The adapter allows normal/ranked, Practice, multiplayer, daily and changing-rate
+gameplay when the site accepts ordinary keyboard input. It returns
+`unsupportedReason` (and `state: "FAIL"`) for the built-in `AT` / skin-editor
+Auto, replay or spectate feeds, and active lanes without usable keyboard bindings.
+The game's `onKeyDown` ignores column input when `s.feed` is active, so those
+feeds cannot be driven through this architecture.
 
-- normal/ranked `play` mode — only `practice` is playable,
-- `s.mp`, multiplayer and daily-challenge params,
-- `AT` / `s.auto` / skin-editor autoplay,
-- replays, `s.feed`, `s.replay` and `s.spectate`,
-- Wind Up / Wind Down / Adaptive Speed.
+`GameplayScreen.complete()` may save or submit a normal play through the game's
+own score flow (`Verified.submit`); Keyfall does not call submission endpoints
+itself. The server has verification rules, and the browser emits honest
+`isTrusted === false` events. **Online score acceptance and connected multiplayer
+have not been tested.** No verification bypass is provided. Do not submit or
+claim automated leaderboard scores as your own.
 
-`src/js/15-screen-gameplay.js::complete()` saves/submits scores only for
-`s.mode === "play"`; `Verified.submit` requires `score.passed && !AT &&
-s.mode === "play" && !s.practice`. Practice mode therefore never produces a
-ranked submission. `src/js/09c-verify.js` and `worker/verify-bundle.js` reject
-unranked/failed mods and detect `inhuman timing` (`BOT_UR=15`, `BOT_NOTES=100`,
-`MIN_HOLD=5`). Keyfall's 12ms tap deferral passes `MIN_HOLD`, and humanization
-is a practice/analysis feature — it is not used to evade those checks, because
-no ranked play is ever driven.
+Start may be armed manually before gameplay, or `general.autoStart` may be
+enabled in More! → Timing (off by default). Stop, emergency stop and the master
+switch cancel an armed start and release held keys. The site's own Auto remains
+unused.
 
-The site's own built-in Auto/AT mode remains unused. Keyfall refuses to start if
-it is already enabled.
+---
+
+## Offline browser regression
+
+The optional `test/browser-ashtonk.mjs` runs the shipped userscript against a
+separate, local checkout of the real game. It generates local 4K and 18K charts
+with chords and holds, checks pre-game manual arming, opt-in auto-start, custom
+bindings, normal/Practice/daily-configured/multiplayer-configured play, Wind
+Up/Down, Adaptive Speed, a Practice seek during a hold, and a trusted emergency
+hotkey during an 18K hold. External requests are blocked. Daily and multiplayer
+are offline configuration fixtures, **not** connected sessions; no server
+scoring is tested.
+
+With Node 22.18+, an existing Chromium/Chrome, and a checkout of the game:
+
+```bash
+git clone https://github.com/ashtonkehler14-glitch/Ashtonk-mania.git /tmp/ashtonkmania
+node /tmp/ashtonkmania/build.mjs  # rebuild its index.html if needed
+ASHTONK_ROOT=/tmp/ashtonkmania CHROME_PATH=/path/to/chromium npm run test:ashtonk
+```
+
+The test was developed against Ashtonk commit `cefb2703375cb687dd6ec367ece7b933181ab432`.
+`playwright-core` does not download a browser. `KEYFALL_CHROME_ARGS` can supply
+additional whitespace-separated Chromium flags when required. The test is
+performance-sensitive: a blocked or heavily throttled browser may miss notes.
 
 ---
 
@@ -219,5 +260,5 @@ it is already enabled.
 | Adds `isTrusted` checks to gameplay input | Synthetic events stop registering | No legitimate fix; guards stop safely |
 | Moves `window` capture listeners to a shadow root or stopped propagation | Document-dispatched events may not reach them | Verify the event path; `InputManager` target may need a site-aware bridge |
 | Changes note shape from `{ col, time, end, isLN }` | Chart parse fails | Update `readHitObjects()` |
-| Adds a new score-submission mode | Practice-only gate may need widening of refusals | Extend `unsupportedReason()` before allowing new modes |
-| Changes Verified / server verification rules | Safety assumptions drift | Re-read `09c-verify.js` / `worker/verify-bundle.js`; keep ranked modes refused |
+| Changes feed/input handling | Keyboard events may be ignored or duplicate another input source | Re-check `unsupportedReason()` against the game's actual input gates |
+| Changes score / server verification | The game may reject or submit plays differently | Re-read its rules; do not claim server acceptance without testing |

@@ -229,8 +229,9 @@ if (api) {
     api.uiVisible === false && rootEl?.dataset.open === "0" && rootEl?.inert === true);
   check("old custom UI key migrates to Right Shift", api.settings.all.input.hotkeys.toggleUI === "ShiftRight");
   check("there is no mouse/console showUI launcher", typeof api.showUI === "undefined");
+  check("automatic chart starts are opt-in", api.settings.all.general.autoStart === false);
   const keydown = (code, { trusted = true, repeat = false, ctrlKey = false } = {}) => {
-    env.document.dispatchEvent({
+    env.window.dispatchEvent({
       type: "keydown", code, isTrusted: trusted, repeat, ctrlKey, metaKey: false, altKey: false,
       bubbles: false, defaultPrevented: false,
       preventDefault() { this.defaultPrevented = true; },
@@ -250,6 +251,16 @@ if (api) {
   keydown("ShiftRight");
   check("trusted Right Shift closes the panel", api.uiVisible === false && rootEl?.dataset.open === "0" && rootEl?.inert === true);
 
+  fake.game.state = "WAIT";
+  api.start();
+  const status = rootEl?.querySelector('[data-part="status"]');
+  const startButton = rootEl?.querySelector('[data-part="start"]');
+  check("armed start is visible while the game is not yet playable",
+    api.diagnostics().pendingStart === "manual" && status?.textContent === "ARMED");
+  startButton?.dispatchEvent({ type: "click", bubbles: false });
+  check("the queued-start button cancels the pending start",
+    api.diagnostics().pendingStart === null && status?.textContent === "READY");
+  fake.game.state = "PLAY";
   api.start();
   check("phase becomes RUNNING", api.phase === "RUNNING", String(api.phase));
   const notice = rootEl?.querySelector('[data-part="notice"]');

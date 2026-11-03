@@ -1,5 +1,4 @@
 import {
-  EXTENDED_SUFFIX_CODES,
   FALLBACK_KEYBINDS,
   MAX_KEY_COUNT,
   MIN_KEY_COUNT,
@@ -105,26 +104,9 @@ export function buildSecondaryMapping(
   return source.map((pair) => pair?.[1] ?? null);
 }
 
-/** Built-in default layout, extended past 10K with spare key codes. */
+/** Built-in 1K–18K default layouts, used only when live keybinds are unavailable. */
 export function fallbackCodes(keyCount: number): string[] {
-  const known = FALLBACK_KEYBINDS[keyCount - 1];
-  if (known) return known.map((pair) => pair[0] ?? "Space");
-
-  // 11K..18K: start from the 10K layout and append unused codes.
-  const base = (FALLBACK_KEYBINDS[FALLBACK_KEYBINDS.length - 1] ?? []).map(
-    (pair) => pair[0] ?? "Space",
-  );
-  const used = new Set(base);
-  const out = [...base];
-  for (const code of EXTENDED_SUFFIX_CODES) {
-    if (out.length >= keyCount) break;
-    if (!used.has(code)) {
-      out.push(code);
-      used.add(code);
-    }
-  }
-  while (out.length < keyCount) out.push("Space");
-  return out.slice(0, keyCount);
+  return (FALLBACK_KEYBINDS[keyCount - 1] ?? []).map((pair) => pair[0] ?? "Space");
 }
 
 /** Extract a normalised chart from a live game. */
@@ -251,9 +233,8 @@ export function buildContextFromGame(
   settings: Settings,
   via: string,
 ): DetectionResult {
-  // A site adapter can refuse a live session for reasons the generic guards do
-  // not know about (ranked/online modes, replays, non-linear rate mods, ...).
-  // Surface that reason before trying to parse or schedule anything.
+  // A site adapter can report an input conflict the generic guards do not know
+  // about, such as a replay feed. Surface it before scheduling anything.
   if (typeof game.unsupportedReason === "string" && game.unsupportedReason.length > 0) {
     return { ok: false, via, game, reason: game.unsupportedReason };
   }

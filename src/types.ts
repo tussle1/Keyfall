@@ -81,7 +81,9 @@ export interface GameLike {
   metadata?: { title?: string; artist?: string; version?: string };
   /** Optional adapter-supplied structural identity for the active chart. */
   chartSignature?: string;
-  /** Set when a site adapter intentionally refuses this live session. */
+  /** Optional read-only judgement clock at a performance.now() timestamp. */
+  chartTimeAtHost?: (hostTime: number) => number | null;
+  /** Set when a site adapter cannot drive the current input path. */
   unsupportedReason?: string;
   /** Present while a site replay is driving input. */
   replayPlayer?: unknown;
@@ -174,6 +176,8 @@ export type HotkeyAction =
 export interface Settings {
   general: {
     enabled: boolean;
+    /** Opt in to starting on each newly detected playable chart. */
+    autoStart: boolean;
     /** Legacy stored value; visibility is controlled only by Right Shift. */
     showOverlay: boolean;
     showKeyboard: boolean;

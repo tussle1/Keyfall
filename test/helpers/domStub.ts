@@ -42,8 +42,11 @@ export class StubEventTarget {
       if (!handlers) continue;
       for (const handler of Array.from(handlers)) {
         handler(event);
-        if (event.__propagationStopped) return !event.defaultPrevented;
+        // stopPropagation does not stop other listeners on the same target;
+        // only stopImmediatePropagation does, just as in the real DOM.
+        if (event.__immediatePropagationStopped) return !event.defaultPrevented;
       }
+      if (event.__propagationStopped) return !event.defaultPrevented;
     }
     return !event.defaultPrevented;
   }
@@ -72,6 +75,7 @@ export class StubKeyboardEvent {
   readonly isTrusted = false;
   defaultPrevented = false;
   __propagationStopped = false;
+  __immediatePropagationStopped = false;
 
   constructor(type: string, init: Record<string, unknown> = {}) {
     this.type = type;
@@ -96,6 +100,11 @@ export class StubKeyboardEvent {
 
   stopPropagation(): void {
     this.__propagationStopped = true;
+  }
+
+  stopImmediatePropagation(): void {
+    this.__propagationStopped = true;
+    this.__immediatePropagationStopped = true;
   }
 }
 

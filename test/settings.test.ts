@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import {
   DEFAULT_SETTINGS,
-  EXTENDED_SUFFIX_CODES,
   FALLBACK_KEYBINDS,
   OFFSET_MAX,
   OFFSET_MIN,
@@ -368,20 +367,25 @@ describe("helpers", () => {
 });
 
 describe("default hotkeys", () => {
-  it("avoid every fallback and extended column layout", () => {
-    const columnCodes = new Set<string>();
-    for (const layouts of FALLBACK_KEYBINDS) {
-      for (const layout of layouts) {
-        for (const code of layout) if (code) columnCodes.add(code);
-      }
+  it("avoids common 1K–10K defaults and reports high-key collisions", () => {
+    for (const layout of FALLBACK_KEYBINDS.slice(0, 10)) {
+      const codes = layout.flat().filter((code): code is string => !!code);
+      assert.deepEqual(findHotkeyCollisions(DEFAULT_SETTINGS, codes), []);
     }
-    for (const code of EXTENDED_SUFFIX_CODES) columnCodes.add(code);
-    for (const [action, code] of Object.entries(DEFAULT_SETTINGS.input.hotkeys)) {
-      assert.ok(
-        !columnCodes.has(code),
-        `${action} default ${code} collides with a column layout`,
-      );
-    }
+    const highKeys = FALLBACK_KEYBINDS[17].flat().filter((code): code is string => !!code);
+    assert.deepEqual(
+      findHotkeyCollisions(DEFAULT_SETTINGS, highKeys).map(({ code }) => code).sort(),
+      ["KeyG", "KeyX", "KeyZ"],
+    );
+  });
+
+  it("has a distinct default code for every lane from 1K to 18K", () => {
+    assert.equal(FALLBACK_KEYBINDS.length, 18);
+    FALLBACK_KEYBINDS.forEach((layout, index) => {
+      const codes = layout.map((pair) => pair[0]);
+      assert.equal(codes.length, index + 1);
+      assert.equal(new Set(codes).size, codes.length);
+    });
   });
 
   it("are letter keys, except the UI toggle on Right Shift", () => {

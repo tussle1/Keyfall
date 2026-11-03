@@ -51,7 +51,7 @@ ChartAnalysis ◄──────────────┘                  
                     Timeline (InputAction[])
                              │
                              ▼
-                        Scheduler ────► ClockMapper (host ↔ chart time)
+                        Scheduler ────► live judgement-clock slope / ClockMapper fallback
                              │
                              ▼
                        InputManager
@@ -93,24 +93,26 @@ the timeline and the scheduler. See
 | `ui/*` | Overlay, keyboard view, debug panel | Touching the engine's internals |
 | `core/settings` | Persistence, validation, clamping | Knowing what settings mean |
 
-The rule throughout: **each layer only sees the types of the layer below it.**
-Nothing downstream of `buildContext` ever touches a site object, which is what
-makes the detection strategies independently replaceable.
+The rule throughout: **each layer only sees the shared contracts of the layer
+below it.** Downstream code uses `GameLike` rather than the site's native
+objects, which makes detection strategies independently replaceable.
 
 ### Why a second site needs only an adapter
 
 Ashtonk!mania has no Pixi/React `Game`, stores notes as `{ col, time, end,
 isLN }`, installs input listeners on `window` capture, and judges against an
-AudioContext-derived `inputTime`. `src/detect/ashtonkAdapter.ts` projects that
-live practice session onto the same `GameLike` getters the engine already reads:
+AudioContext-derived `inputTime`. `src/detect/ashtonkAdapter.ts` projects the
+live session onto the same `GameLike` contract the engine already reads:
 `hitObjects`, `timeElapsed`, `state`, `columnKeybinds`, `scoreSystem`,
-`chartSignature` and `unsupportedReason`.
+`chartSignature` and `unsupportedReason`, plus an optional `chartTimeAtHost`
+judgement-clock predictor.
 
 There is still exactly one timeline, one `ClockMapper`, one `Scheduler`, one
 `InputManager`, one humanizer and one overlay. The adapter never calls the
 site's Auto (`AT`), replay feed, private judgement engine, or score submission.
-Because Ashtonk!mania has ranked/online leaderboards, it refuses everything
-except Practice mode. See [`ASHTONK-CONTRACT.md`](./ASHTONK-CONTRACT.md).
+Replay, spectate and built-in Auto feeds are refused because the game ignores
+keyboard input during those feeds. Normal gameplay can trigger the game's own
+score-submission flow; see [`ASHTONK-CONTRACT.md`](./ASHTONK-CONTRACT.md).
 
 ## Design decisions worth knowing
 
@@ -129,6 +131,12 @@ So `timing/clock.ts` fits `chart = slope × host + intercept` over a sliding
 24-sample window by least squares, reports its own residual, and declares
 `confident` only once it has enough samples and a tight fit. `hostAt(target)`
 inverts the model, and that prediction is what timers are armed against.
+
+For Ashtonk!mania, the adapter additionally exposes the site's judgement clock
+at an arbitrary host timestamp. The engine estimates its current slope from two
+samples; the scheduler revises an armed deadline as speed changes and rechecks
+before firing. The least-squares `ClockMapper` remains the fallback for sites
+without that capability. Rate changes are not part of chart identity.
 
 Discontinuity detection is the subtle part. A **backward** chart jump is always
 a seek. A **forward** jump is ambiguous: a frame stall recovering also produces
@@ -304,9 +312,10 @@ retrospectively, which made the counts depend on arrival order.
 
 ## Testing
 
-275 tests, `node --test`, no test framework dependency, plus a 60-check smoke test
-that runs the shipped bundle. The Ashtonk!mania tests include an end-to-end run
-through the DOM stub's `document -> window` capture path.
+Tests use `node --test` without a test framework, plus a smoke test that runs the
+shipped bundle. The Ashtonk!mania tests include an end-to-end run through the DOM
+stub's `document -> window` capture path and an optional offline Chromium test
+against the real game.
 
 Node strips TypeScript types natively (≥22.18) but still requires fully
 specified ESM paths, while the source uses extensionless imports (correct for a

@@ -45,8 +45,11 @@ import { lowerBound, round } from "../util/helpers";
  * is found, everything is event- and timer-driven.
  */
 
+type PendingStart = "manual" | "automatic" | null;
+
 export interface EngineEvents {
   phase: { phase: EnginePhase; reason?: string };
+  pendingStart: { pending: PendingStart };
   detected: { chart: ParsedChart; keyMapping: KeyMapping; analysis: ChartAnalysis; via: string };
   /**
    * The action timeline was rebuilt without a new beatmap being detected —
@@ -127,6 +130,9 @@ export class Engine {
   private desyncCount = 0;
   /** Only a pause caused by the game should auto-resume with the game. */
   private pausedBySite = false;
+  /** Start requested before the live game reaches PLAY, or by opt-in auto-start. */
+  private pendingStart: PendingStart = null;
+  private lastAutoStart: boolean;
   private static readonly DESYNC_LIMIT = 6;
 
   private lastError = "";
@@ -137,6 +143,7 @@ export class Engine {
     this.win = options.win ?? window;
 
     const settings = this.settingsManager.all;
+    this.lastAutoStart = settings.general.autoStart;
 
     this.input = new InputManager({
       target: this.win.document,
@@ -247,6 +254,7 @@ export class Engine {
       return;
     }
 
+    if (this.phase === "RUNNING") return;
     if (this.phase === "PAUSED") {
       this.resume();
       return;
@@ -254,10 +262,27 @@ export class Engine {
 
     const detection = this.ensureDetected();
     if (!detection?.ok) {
-      this.log("warn", detection?.reason ?? "No gameplay detected yet.");
-      this.setPhase("DETECTING");
+      if (this.phase !== "ERROR") {
+        this.setPendingStart("manual");
+        this.setPhase("DETECTING");
+        this.log("info", "Autoplay armed — waiting for a playable chart");
+      } else {
+        this.log("warn", detection?.reason ?? this.lastError);
+      }
       return;
     }
+    // Detection can itself start an already-armed session.
+    if (this.scheduler.isRunning) return;
+    if (this.game?.state !== "PLAY") {
+      // Emergency stop can leave an already-detected chart in IDLE; restore
+      // READY so the state monitor can start it when playback becomes possible.
+      this.setPhase("READY");
+      // An explicit Start remains armed even if the auto-start option is later disabled.
+      this.setPendingStart("manual");
+      this.log("info", "Autoplay armed — waiting for gameplay to start or resume");
+      return;
+    }
+    this.setPendingStart(null);
 
     try {
       this.buildTimeline();
@@ -280,7 +305,9 @@ export class Engine {
     const now = this.chartTime();
     this.scheduler.setOptions(settings.timing.lookahead, settings.timing.spinThreshold);
     this.scheduler.setActionOffset(this.effectiveOffset(settings));
-    this.scheduler.load(this.timeline.actions, Math.max(now, 0));
+    // Ashtonk's lead-in can put its judgement clock below zero. Preserve it:
+    // a negative offset may make the opening note due before chart time zero.
+    this.scheduler.load(this.timeline.actions, now);
     this.scheduler.start();
 
     this.startStatsLoop();
@@ -313,9 +340,15 @@ export class Engine {
       this.safeStop("Gameplay ended while paused");
       return;
     }
-    if (this.game?.state === "PAUSE" || this.game?.state === "UNPAUSE") {
-      // The user asked to resume, but the game still has its own pause open.
-      // Resume automatically when the site's countdown finishes.
+    if (this.chartChanged()) {
+      // Rebind before honoring a resume if the site's chart was replaced.
+      this.pausedBySite = true;
+      this.tryDetect();
+      return;
+    }
+    if (this.game?.state !== "PLAY") {
+      // WAIT, PAUSE and UNPAUSE cannot accept lane input. Resume only after
+      // the loader or the site's pause countdown reaches playable state.
       this.pausedBySite = true;
       this.log("info", "waiting for the game to resume");
       return;
@@ -334,6 +367,7 @@ export class Engine {
   /** Normal stop: release everything, clear the queue, stay detected. */
   stop(): void {
     if (this.disposed) return;
+    this.setPendingStart(null);
     this.teardownRun("stopped");
     this.setPhase(this.chart ? "READY" : "DETECTING");
     this.log("info", "stopped");
@@ -345,6 +379,7 @@ export class Engine {
    */
   emergencyStop(reason = "EMERGENCY STOP"): void {
     if (this.disposed) return;
+    this.setPendingStart(null);
     this.scheduler.stop();
     this.input.releaseAll();
     this.stopStatsLoop();
@@ -375,6 +410,11 @@ export class Engine {
 
   /** Apply a settings change to the live engine. */
   applySettings(settings: Settings): void {
+    const autoStartChanged = settings.general.autoStart !== this.lastAutoStart;
+    this.lastAutoStart = settings.general.autoStart;
+    if (!settings.general.enabled || (autoStartChanged && !settings.general.autoStart && this.pendingStart === "automatic")) {
+      this.setPendingStart(null);
+    }
     // The master switch is a real safety control, not just a cosmetic toggle.
     // Disabling it during a run must immediately stop and release every key.
     if (!settings.general.enabled && (this.phase === "RUNNING" || this.phase === "PAUSED")) {
@@ -424,6 +464,10 @@ export class Engine {
     if (this.phase === "RUNNING" && this.timeline && (offsetChanged || timelineReloaded)) {
       const released = this.input.reconcileHeld(this.timeline.actions, this.chartTime(), offset);
       if (released) this.log("info", `released ${released} key(s) whose release moved behind the playhead`);
+    }
+    if (autoStartChanged && settings.general.autoStart && settings.general.enabled && this.phase === "READY") {
+      if (!this.pendingStart) this.setPendingStart("automatic");
+      this.maybeStartPending();
     }
   }
 
@@ -506,6 +550,9 @@ export class Engine {
       // Game closed / results screen / song select.
       if (this.game) {
         const reason = "Gameplay closed";
+        // A manual start for a prepared chart must not transfer to an
+        // unrelated chart if the user backs out before playback begins.
+        this.setPendingStart(null);
         this.teardownRun(reason);
         this.game = null;
         this.chart = null;
@@ -524,7 +571,10 @@ export class Engine {
     const result: DetectionResult = buildContextFromGame(acquired.game, settings, acquired.via);
 
     if (!result.ok) {
-      if (this.phase === "RUNNING") {
+      // Do not carry an armed start past a refused/broken chart. An opt-in
+      // automatic start will be armed again for the next valid chart.
+      this.setPendingStart(null);
+      if (this.phase === "RUNNING" || this.phase === "PAUSED") {
         this.safeStop(result.reason ?? "Detection lost");
       } else {
         this.game = acquired.game;
@@ -555,8 +605,17 @@ export class Engine {
     }
 
     // --- New beatmap (or first detection) ------------------------------
-    if (this.phase === "RUNNING" && signatureChanged) {
-      this.log("info", "Beatmap changed mid-run — restarting autoplay session");
+    // A manual start already tied to a prepared chart must not transfer to a
+    // different chart if the site replaces it without an intervening close.
+    if (signatureChanged && this.lastChartSignature && this.phase === "READY" && this.pendingStart === "manual") {
+      this.setPendingStart(null);
+    }
+    const manuallyPaused = this.phase === "PAUSED" && !this.pausedBySite;
+    const continueRunning = this.phase === "RUNNING" || (this.phase === "PAUSED" && this.pausedBySite);
+    if (continueRunning || this.phase === "PAUSED") {
+      // A retry or practice seek can replace the live game/engine even when
+      // the chart looks identical. Release the old run before rebinding.
+      this.log("info", "Gameplay chart changed — rebuilding autoplay session");
       this.teardownRun("beatmap changed");
     }
 
@@ -592,6 +651,19 @@ export class Engine {
       "info",
       `chart detected via ${acquired.via}: ${chart.keyCount}K, ${chart.noteCount} notes, ${this.timeline!.actions.length} actions`,
     );
+    // Keep an explicitly started run going across an in-game retry/seek. An
+    // explicitly paused session stays paused; auto-start is separately opt-in.
+    if (continueRunning) this.setPendingStart("manual");
+    else if (settings.general.enabled && settings.general.autoStart && !manuallyPaused && !this.pendingStart) {
+      this.setPendingStart("automatic");
+    }
+    this.maybeStartPending();
+  }
+
+  private maybeStartPending(): void {
+    if (!this.pendingStart || !this.settingsManager.all.general.enabled ||
+        this.phase !== "READY" || this.game?.state !== "PLAY") return;
+    this.start();
   }
 
   private ensureDetected(): DetectionResult | null {
@@ -696,12 +768,30 @@ export class Engine {
    * note is fired by catch-up.
    */
   private hostTimeForChart(chartTime: number): number {
-    const predicted = this.clock.hostAt(chartTime);
+    const now = performance.now();
+    // Some sites expose the same read-only clock they use to judge an input at
+    // an arbitrary event timestamp. Its instantaneous slope responds to speed
+    // changes immediately; a regression over older frames would lag behind.
+    try {
+      const clockAt = this.game?.chartTimeAtHost;
+      if (clockAt) {
+        const current = clockAt.call(this.game, now);
+        const ahead = clockAt.call(this.game, now + 100);
+        if (current !== null && ahead !== null) {
+          const slope = (ahead - current) / 100;
+          if (Number.isFinite(current) && Number.isFinite(slope) && slope >= 0.05 && slope <= 8) {
+            return now + (chartTime - current) / slope;
+          }
+        }
+      }
+    } catch {
+      // A changing/older site API must not prevent the fitted-clock fallback.
+    }
 
+    const predicted = this.clock.hostAt(chartTime);
     // Before the model is fitted, `hostAt` can return nonsense (it is anchored
     // on a single sample). Clamp the result so we never arm a timer in the far
     // past or far future.
-    const now = performance.now();
     const state = this.clock.getState();
     if (!state.confident) {
       const lookahead = this.settingsManager.all.timing.lookahead;
@@ -745,15 +835,17 @@ export class Engine {
     }
 
     const game = this.game;
+    // An adapter can notice a replaced engine between detection polls. Never
+    // send an old chart's batch into the replacement; the monitor will rebind.
+    if (this.chartChanged()) {
+      this.pauseForSite();
+      return;
+    }
     // Only drive input while the site is actually playing. During WAIT the
     // site ignores column hits; during PAUSE/FAIL firing would be wrong.
     if (game && game.state !== "PLAY") {
-      if (game.state === "PAUSE" || game.state === "UNPAUSE") {
-        this.input.releaseAll();
-        this.scheduler.pause();
-        this.pausedBySite = true;
-        this.setPhase("PAUSED");
-        this.log("info", "site paused — autoplay paused");
+      if (game.state === "WAIT" || game.state === "PAUSE" || game.state === "UNPAUSE") {
+        this.pauseForSite();
       } else if (game.state === "FAIL") {
         // The play failed, typically with a hold still down. Release and stop
         // here rather than waiting for the watchdog: this runs on the firing
@@ -857,6 +949,9 @@ export class Engine {
     }
 
     if (!this.isGameAlive()) {
+      // A pending start belongs to the current prepared session; a failed,
+      // closed or incompatible session must not leave it armed for another.
+      this.setPendingStart(null);
       const policy = this.game?.unsupportedReason;
       if (typeof policy === "string" && policy.length > 0) {
         this.lastError = policy;
@@ -891,15 +986,20 @@ export class Engine {
       return;
     }
 
+    // The adapter supplies an identity that changes on a retry/seek, even if
+    // the surrounding game object is reused. Check before resuming or firing
+    // against a newly prepared chart rather than waiting for the slower poll.
+    if (this.chartChanged()) {
+      this.tryDetect();
+      return;
+    }
     const state = this.game?.state;
-    if (state === "PAUSE" || state === "UNPAUSE") {
-      if (this.phase === "RUNNING") {
-        this.input.releaseAll();
-        this.scheduler.pause();
-        this.pausedBySite = true;
-        this.setPhase("PAUSED");
-        this.log("info", "site paused — autoplay paused");
-      }
+    if (state === "PLAY" && this.phase === "READY" && this.pendingStart) {
+      this.maybeStartPending();
+      return;
+    }
+    if (state === "WAIT" || state === "PAUSE" || state === "UNPAUSE") {
+      if (this.phase === "RUNNING") this.pauseForSite();
     } else if (state === "PLAY" && this.phase === "PAUSED" && this.pausedBySite && this.game) {
       // The site resumed on its own (e.g. the user unpaused in-game).
       this.resume();
@@ -993,8 +1093,8 @@ export class Engine {
       if (canvas instanceof Element && !canvas.isConnected) return false;
     }
 
-    // A site adapter's policy refusal (ranked/online mode, replay, Auto mod,
-    // non-linear rate mod) is terminal for this live session.
+    // A site adapter's input conflict (e.g. a replay or Auto feed) is
+    // terminal for this live session.
     if (typeof game.unsupportedReason === "string" && game.unsupportedReason.length > 0) {
       return false;
     }
@@ -1006,6 +1106,23 @@ export class Engine {
     if (!Array.isArray(game.hitObjects) || game.hitObjects.length === 0) return false;
 
     return true;
+  }
+
+  /** Whether an adapter's live chart identity differs from the parsed chart. */
+  private chartChanged(): boolean {
+    const signature = this.game?.chartSignature;
+    return !!this.lastChartSignature && typeof signature === "string" &&
+      signature.length > 0 && signature !== this.lastChartSignature;
+  }
+
+  /** Suspend scheduling and release keys while the site cannot accept input. */
+  private pauseForSite(): void {
+    if (this.phase !== "RUNNING") return;
+    this.input.releaseAll();
+    this.scheduler.pause();
+    this.pausedBySite = true;
+    this.setPhase("PAUSED");
+    this.log("info", "site not playable or chart changed — autoplay paused");
   }
 
   /** Chart time at which each currently-held column was pressed. */
@@ -1030,7 +1147,17 @@ export class Engine {
     this.emitter.emit("phase", { phase, reason });
   }
 
+  private setPendingStart(pending: PendingStart): void {
+    if (this.pendingStart === pending) return;
+    this.pendingStart = pending;
+    // Stop/emergency shut down the monitor. Re-arming an already prepared
+    // chart must restart it, or the transition from WAIT to PLAY is missed.
+    if (pending && this.game && this.chart) this.startStateMonitor();
+    this.emitter.emit("pendingStart", { pending });
+  }
+
   private fail(message: string): void {
+    this.setPendingStart(null);
     this.lastError = message;
     this.teardownRun(message);
     this.setPhase("ERROR", message);
@@ -1039,6 +1166,7 @@ export class Engine {
 
   /** Unconditional safe shutdown, used by every guard. */
   private safeStop(reason: string): void {
+    this.setPendingStart(null);
     this.lastError = reason;
     this.scheduler.stop();
     this.input.releaseAll();
@@ -1067,6 +1195,7 @@ export class Engine {
     const clockState = this.clock.getState();
     return {
       phase: this.phase,
+      pendingStart: this.pendingStart,
       via: this.detectedVia,
       site: this.siteCheck?.verdict ?? "unknown",
       siteFamily: this.siteCheck?.family ?? "unknown",

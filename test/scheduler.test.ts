@@ -5,10 +5,11 @@ import { Scheduler, createFastTask } from "../src/timing/scheduler";
 import type { InputAction } from "../src/types";
 
 /** A fully controllable clock + task queue, so timing is exact not flaky. */
-function harness(options: { lookahead?: number; spinThreshold?: number } = {}) {
+function harness(options: { lookahead?: number; spinThreshold?: number; ignoreCancel?: boolean } = {}) {
   let now = 0;
   let chart = 0;
   let slope = 1; // chart ms per host ms
+  let predictionAvailable = true;
 
   interface Task {
     at: number;
@@ -32,7 +33,7 @@ function harness(options: { lookahead?: number; spinThreshold?: number } = {}) {
   const scheduler = new Scheduler(
     {
       nowChart: () => chart,
-      hostTimeFor: (chartTime) => (chartTime - chart) / slope + now,
+      hostTimeFor: (chartTime) => predictionAvailable ? (chartTime - chart) / slope + now : Number.NaN,
       fire: (batch, hostNow, target) => fired.push({ actions: batch, hostNow, target }),
       sample: (host, chartTime) => {
         samples.push({ host, chart: chartTime });
@@ -57,7 +58,7 @@ function harness(options: { lookahead?: number; spinThreshold?: number } = {}) {
       },
       cancelTask: (id) => {
         const index = tasks.findIndex((t) => t.id === id);
-        if (index >= 0) tasks.splice(index, 1);
+        if (index >= 0 && !options.ignoreCancel) tasks.splice(index, 1);
       },
       requestFrame: (cb) => {
         frames.push(cb);
@@ -156,7 +157,14 @@ function harness(options: { lookahead?: number; spinThreshold?: number } = {}) {
       return chart;
     },
     set slope(value: number) {
+      // Rate changes preserve song position, just like the site's Music.rampTo.
+      syncChart();
+      chartBase = chart;
+      hostBase = now;
       slope = value;
+    },
+    set predictionAvailable(value: boolean) {
+      predictionAvailable = value;
     },
     get pendingTasks() {
       return tasks.length;
@@ -321,6 +329,78 @@ describe("Scheduler", () => {
     h.scheduler.dispose();
   });
 
+  it("moves an armed deadline earlier when the chart accelerates", () => {
+    const h = harness();
+    h.scheduler.load([act(0, 1000, "down"), act(1, 1050, "up"), act(2, 1100, "down")], 0);
+    h.setChart(0);
+    h.scheduler.start();
+    h.advance(900, 5);
+    assert.equal(h.pendingTasks, 1);
+    h.slope = 4;
+    h.advance(100, 5);
+
+    assert.deepEqual(h.fired.flatMap((b) => b.actions.map((a) => a.seq)), [0, 1, 2]);
+    assert.ok(Math.abs(h.fired[0].hostNow - 925) <= 1, `first note at ${h.fired[0].hostNow}`);
+    assert.ok(Math.abs(h.fired[1].hostNow - 937.5) <= 1, `second note at ${h.fired[1].hostNow}`);
+    assert.equal(h.scheduler.droppedCount, 0);
+  });
+
+  it("rechecks an armed deadline when the chart slows down", () => {
+    const h = harness();
+    h.scheduler.load([act(0, 1000, "down")], 0);
+    h.setChart(0);
+    h.scheduler.start();
+    h.advance(900, 5);
+    h.slope = 0.5;
+    h.advance(150, 5);
+    assert.equal(h.fired.length, 0, "the original timer must not fire early");
+    h.advance(75, 5);
+    assert.equal(h.fired.length, 1);
+    assert.ok(Math.abs(h.fired[0].hostNow - 1100) <= 1);
+  });
+
+  it("does not fire early if an armed deadline loses its clock prediction", () => {
+    const h = harness();
+    h.scheduler.load([act(0, 1000, "down")], 0);
+    h.setChart(0);
+    h.scheduler.start();
+    h.advance(900, 5);
+    assert.equal(h.pendingTasks, 1);
+    h.slope = 0.5;
+    h.predictionAvailable = false;
+    h.advance(110, 5); // old timer wakes at 1000, but chart is only at 950
+    assert.equal(h.fired.length, 0);
+    h.predictionAvailable = true;
+    h.advance(120, 5);
+    assert.equal(h.fired.length, 1);
+    assert.ok(Math.abs(h.fired[0].hostNow - 1100) <= 1);
+  });
+
+  it("cancels an obsolete armed timer when catch-up advances to another note", () => {
+    const h = harness();
+    h.scheduler.load([act(0, 1000, "down"), act(1, 1010, "up"), act(2, 1020, "down")], 0);
+    h.setChart(0);
+    h.scheduler.start();
+    h.advance(900, 5);
+    h.seek(995); // a modest clock jump that is not classified as a seek
+    h.advance(30, 10);
+    assert.deepEqual(h.fired.flatMap((b) => b.actions.map((a) => a.seq)), [0, 1, 2]);
+    assert.ok(h.fired[1].hostNow <= 916, `next note was delayed until ${h.fired[1].hostNow}`);
+  });
+
+  it("ignores canceled callbacks that have already entered the browser queue", () => {
+    const h = harness({ ignoreCancel: true });
+    h.scheduler.load([act(0, 1000, "down"), act(1, 1300, "up")], 0);
+    h.setChart(0);
+    h.scheduler.start();
+    h.advance(900, 5);
+    h.slope = 4;
+    h.advance(200, 5);
+    assert.deepEqual(h.fired.flatMap((b) => b.actions.map((a) => a.seq)), [0, 1]);
+    assert.ok(Math.abs(h.fired[1].hostNow - 1000) <= 1, "stale callback must not clear the new timer");
+    assert.equal(h.completed, 1);
+  });
+
   it("stop clears the timeline and cancels timers", () => {
     const h = harness();
     h.scheduler.load([act(0, 100, "down"), act(1, 200, "down")], 0);
@@ -457,6 +537,24 @@ describe("createFastTask", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(ran, 1);
     fast.dispose();
+  });
+
+  it("uses an asynchronous, cancelable timer when MessageChannel is unavailable", async () => {
+    const original = globalThis.MessageChannel;
+    try {
+      (globalThis as any).MessageChannel = undefined;
+      const fast = createFastTask();
+      let ran = 0;
+      const canceled = fast.schedule(() => ran += 10, 0);
+      fast.cancel(canceled);
+      fast.schedule(() => ran++, 0);
+      assert.equal(ran, 0, "zero-delay fallback must not run synchronously");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(ran, 1);
+      fast.dispose();
+    } finally {
+      globalThis.MessageChannel = original;
+    }
   });
 
   it("keeps running after a task throws", async () => {

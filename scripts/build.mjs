@@ -47,7 +47,7 @@ const USERSCRIPT_HEADER = `// ==UserScript==
 // @version      ${pkg.version}
 // @updateURL    https://raw.githubusercontent.com/tussle1/Keyfall/main/release/keyfall.user.js
 // @downloadURL  https://raw.githubusercontent.com/tussle1/Keyfall/main/release/keyfall.user.js
-// @description  Keyfall — its own keyboard-event autoplay for Web osu!mania and Ashtonk!mania Practice mode. Never uses either site's built-in Autoplay/Auto mod. Optional reproducible timing humanization.
+// @description  Keyfall — its own keyboard-event autoplay for Web osu!mania and Ashtonk!mania. Never uses either site's built-in Autoplay/Auto mod. Optional reproducible timing humanization.
 // @author       tussle1
 // @match        https://webosumania.com/*
 // @match        https://www.webosumania.com/*
@@ -67,7 +67,7 @@ const USERSCRIPT_HEADER = `// ==UserScript==
 
 // The userscript and plain script are each standalone redistributions of the
 // OFL font, so include the complete copyright notice and license in both.
-const BANNER = `/*! Keyfall v${pkg.version} — its own keyboard-event autoplay for Web osu!mania and Ashtonk!mania Practice mode. Never uses either site's built-in Autoplay/Auto mod. */\n/* Bundled fallback font: Comfortaa (SIL Open Font License 1.1)\n${fontLicense.replaceAll("*/", "* /")}\n*/`;
+const BANNER = `/*! Keyfall v${pkg.version} — its own keyboard-event autoplay for Web osu!mania and Ashtonk!mania. Never uses either site's built-in Autoplay/Auto mod. */\n/* Bundled fallback font: Comfortaa (SIL Open Font License 1.1)\n${fontLicense.replaceAll("*/", "* /")}\n*/`;
 
 /** Shared esbuild options. */
 const baseOptions = {

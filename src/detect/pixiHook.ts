@@ -19,7 +19,7 @@ function viaPixiGlobal(win: Window): GameLike | null {
   return findGameViaPixiGlobal(win);
 }
 
-/** Ashtonk!mania: read the exported app and adapt its live practice session. */
+/** Ashtonk!mania: read the exported app and adapt its live gameplay session. */
 function viaAshtonkGlobal(win: Window): GameLike | null {
   return acquireAshtonkGame(win);
 }

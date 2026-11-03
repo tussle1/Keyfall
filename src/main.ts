@@ -166,6 +166,10 @@ function boot(win: Window): Bootstrapped | null {
   );
 
   offs.push(
+    engine.on("pendingStart", ({ pending }) => overlay?.setPendingStart(pending !== null)),
+  );
+
+  offs.push(
     engine.on("site", (check) => {
       if (check.verdict === "unknown") {
         // Keep the notice ready in the hidden panel without opening it.

@@ -95,6 +95,18 @@ describe("trainer overlay", () => {
     overlay.dispose(); settings.dispose();
   });
 
+  it("exposes an opt-in auto-start switch in timing settings", () => {
+    const { overlay, settings } = createOverlay();
+    const input = find(overlay.root, '[data-setting="general.autoStart"]');
+    assert.equal(input.checked, false);
+    input.checked = true;
+    input.dispatchEvent(event("change"));
+    assert.equal(settings.all.general.autoStart, true);
+    settings.reset();
+    assert.equal(input.checked, false);
+    overlay.dispose(); settings.dispose();
+  });
+
   it("settles clicks but switches to direct pointer tracking while dragging", () => {
     const { overlay, settings } = createOverlay();
     overlay.setVisible(true);
@@ -242,6 +254,20 @@ describe("trainer overlay", () => {
     settings.dispose();
   });
 
+  it("shows an armed start and lets the primary button cancel it", () => {
+    const { overlay, settings, calls } = createOverlay();
+    overlay.setPhase("DETECTING");
+    overlay.setPendingStart(true);
+    assert.equal(find(overlay.root, '[data-part="status"]').textContent, "ARMED");
+    const button = find(overlay.root, '[data-part="start"]');
+    assert.equal(find(button, ".wom-action-label").textContent, "Cancel queued start");
+    button.dispatchEvent(event("click"));
+    assert.ok(calls.includes("stop"));
+    overlay.setPendingStart(false);
+    assert.equal(find(overlay.root, '[data-part="status"]').textContent, "DETECTING");
+    overlay.dispose(); settings.dispose();
+  });
+
   it("routes action buttons correctly and changes start into pause / resume", () => {
     const { overlay, settings, calls } = createOverlay();
     const start = find(overlay.root, '[data-part="start"]');
@@ -270,9 +296,9 @@ describe("trainer overlay", () => {
     const start = find(overlay.root, '[data-action="start"]');
     start.dispatchEvent(event("click"));
     assert.equal(overlay.isCapturing, true);
-    env.document.dispatchEvent(event("keydown", { code: "KeyM", isTrusted: false, repeat: false }));
+    env.window.dispatchEvent(event("keydown", { code: "KeyM", isTrusted: false, repeat: false }));
     assert.equal(settings.all.input.hotkeys.start, DEFAULT_SETTINGS.input.hotkeys.start);
-    env.document.dispatchEvent(event("keydown", { code: "KeyM", isTrusted: true, repeat: false }));
+    env.window.dispatchEvent(event("keydown", { code: "KeyM", isTrusted: true, repeat: false }));
     assert.equal(settings.all.input.hotkeys.start, "KeyM");
     assert.equal(overlay.isCapturing, false);
     overlay.dispose(); settings.dispose();
@@ -287,7 +313,7 @@ describe("trainer overlay", () => {
     }, mapping);
     assert.match(find(overlay.root, '[data-part="analysis"]').textContent, /8 taps · 2 holds · 4 chord notes · 1 jacks · peak 6 NPS/);
     find(overlay.root, '[data-column="0"]').dispatchEvent(event("click"));
-    env.document.dispatchEvent(event("keydown", { code: "KeyQ", isTrusted: true, repeat: false }));
+    env.window.dispatchEvent(event("keydown", { code: "KeyQ", isTrusted: true, repeat: false }));
     assert.deepEqual(settings.all.input.keyMappings["4"], ["KeyQ", "KeyF", "KeyJ", "KeyK"]);
     assert.equal(calls.filter((call) => call === "mapping").length, 1);
     find(overlay.root, '[data-part="reread"]').dispatchEvent(event("click"));
@@ -330,15 +356,28 @@ describe("Right Shift hotkey", () => {
       event("keydown", { code: "ShiftLeft", isTrusted: true, repeat: false }),
       event("keydown", { code: "KeyM", isTrusted: true, repeat: false }),
       event("keydown", { code: "ShiftRight", isTrusted: true, repeat: false, ctrlKey: true }),
-    ]) env.document.dispatchEvent(key);
+    ]) env.window.dispatchEvent(key);
     assert.deepEqual(actions, []);
     const right = event("keydown", { code: "ShiftRight", isTrusted: true, repeat: false });
-    env.document.dispatchEvent(right);
+    env.window.dispatchEvent(right);
     assert.deepEqual(actions, ["toggleUI"]);
     assert.equal(right.defaultPrevented, true);
     hotkeys.dispose();
-    env.document.dispatchEvent(event("keydown", { code: "ShiftRight", isTrusted: true, repeat: false }));
+    env.window.dispatchEvent(event("keydown", { code: "ShiftRight", isTrusted: true, repeat: false }));
     assert.equal(actions.length, 1);
+  });
+
+  it("keeps emergency reachable when a window-capture game stops lane propagation", () => {
+    const actions: HotkeyAction[] = [];
+    const stoppedLane = (e: any) => { if (e.code === "KeyZ") e.stopPropagation(); };
+    env.window.addEventListener("keydown", stoppedLane, true);
+    const hotkeys = new HotkeyManager({ onAction: (action) => actions.push(action), getSiteCodes: () => ["KeyZ"] });
+    hotkeys.apply(DEFAULT_SETTINGS); hotkeys.install();
+    env.window.dispatchEvent(event("keydown", { code: "KeyZ", isTrusted: true, repeat: false }));
+    assert.deepEqual(actions, ["emergency"]);
+    assert.deepEqual(hotkeys.currentCollisions.map((collision) => collision.code), ["KeyZ"]);
+    hotkeys.dispose();
+    env.window.removeEventListener("keydown", stoppedLane, true);
   });
 
   it("does not trigger action hotkeys while typing, but still allows Right Shift", () => {
@@ -346,8 +385,8 @@ describe("Right Shift hotkey", () => {
     const hotkeys = new HotkeyManager({ onAction: (action) => actions.push(action), getSiteCodes: () => [] });
     hotkeys.apply(DEFAULT_SETTINGS); hotkeys.install();
     const target = { tagName: "INPUT", isContentEditable: false };
-    env.document.dispatchEvent(event("keydown", { code: "KeyG", isTrusted: true, repeat: false, target }));
-    env.document.dispatchEvent(event("keydown", { code: "ShiftRight", isTrusted: true, repeat: false, target }));
+    env.window.dispatchEvent(event("keydown", { code: "KeyG", isTrusted: true, repeat: false, target }));
+    env.window.dispatchEvent(event("keydown", { code: "ShiftRight", isTrusted: true, repeat: false, target }));
     assert.deepEqual(actions, ["toggleUI"]);
     hotkeys.dispose();
   });

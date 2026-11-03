@@ -4,7 +4,7 @@
 
 # Keyfall
 
-**One autoplay engine for Web osu!mania and Ashtonk!mania Practice mode**
+**One autoplay engine for Web osu!mania and Ashtonk!mania**
 
 Detects the live chart, models the game's clock, and drives each site's own
 keyboard input path — with optional reproducible timing humanization. Never uses
@@ -12,7 +12,7 @@ either site's built-in Autoplay/Auto mod.
 
 [![Status](https://img.shields.io/badge/status-active-success)](#disclaimer)
 [![Code license: MIT](https://img.shields.io/badge/code_license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.4.0-ff6b9d)](#installation)
+[![Version](https://img.shields.io/badge/version-1.5.0-ff6b9d)](#installation)
 [![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=000)](#development)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=fff)](#development)
 [![HTML5](https://img.shields.io/badge/HTML5-E34F26?logo=html5&logoColor=fff)](#try-it-without-the-site)
@@ -45,9 +45,11 @@ dispatches plain DOM `KeyboardEvent`s on `document`. Each site's own input syste
 receives them, judges them against its own clock, and scores them with its own
 scoring. Nothing calls into private scoring code.
 
-On Ashtonk!mania only **Practice** mode is supported. Normal/ranked, multiplayer,
-daily, replay, spectate and `AT` sessions are refused before any input is
-produced, so Keyfall never submits an automated score to a shared leaderboard.
+On Ashtonk!mania the same input path can play normal, Practice, multiplayer,
+daily and variable-speed sessions. Replay, spectating and the built-in `AT`
+Auto feed remain incompatible: the game ignores gameplay keyboard input while
+those feeds run. **The game itself may submit normal or online plays.** Server
+acceptance has not been tested; do not use automation to claim leaderboard scores.
 
 **The problem it solves.** Both sites ship a built-in Autoplay/Auto mod, and for
 pure autoplay that mod is strictly better — it is frame-exact and needs no
@@ -64,7 +66,7 @@ double-fire every note.
 **The pipeline:**
 
 ```
-site adapter → GameLike  (WOM: Pixi Game; Ashtonk: Practice session)
+site adapter → GameLike  (WOM: Pixi Game; Ashtonk: live session)
                                                      │
                             game.hitObjects ─────────┤  (WOM holds arrive as a
                             game.columnKeybinds ─────┤   head tap + hold object)
@@ -74,9 +76,9 @@ site adapter → GameLike  (WOM: Pixi Game; Ashtonk: Practice session)
                                                      │
                         Timeline of InputActions ────┤  (optional humanization
                                                      │   baked in here)
-                              ClockMapper ───────────┤  (least-squares fit of
-                                                     │   chart time vs
-                                                     │   performance.now())
+                  judgement clock / ClockMapper ─────┤  (live input-time slope
+                                                     │   or least-squares fit
+                                                     │   vs performance.now())
                                    Scheduler ────────┘  (one rAF loop,
                                                          look-ahead arming)
                                                      │
@@ -99,7 +101,7 @@ There is no second timeline, clock, scheduler, humanizer or input manager.
 
 - **Layered site and game detection.** Site-specific ordered strategies: WOM's
   `window.__PIXI_APP__` global, viewport-sized-canvas scan and React fiber probe;
-  Ashtonk!mania's exported `window.AshtonkMania` practice session. Each is
+  Ashtonk!mania's exported `window.AshtonkMania` live session. Each is
   independent; a strategy that throws cannot break the others. Recognition is
   shape-based, never name-based. On an unrelated site the overlay still uses the
   required legacy copy `Web osu!mania not detected.`
@@ -108,8 +110,8 @@ There is no second timeline, clock, scheduler, humanizer or input manager.
   `s.engine.score`, `Settings.keybinds(keys)` and `s.keyMap` into the same
   `GameLike` contract. The existing chart parser, clock mapper, timeline,
   humanization, guards, stats, overlay, settings and synthetic `KeyboardEvent`
-  path are reused unchanged. `AT`, `generateAutoInputs`, `s.feed`, replay
-  playback, `Verified.submit` and private judgement APIs are never called.
+  path are shared. Keyfall checks for `s.feed` conflicts but never invokes the
+  site's Auto generator, replay player, `Verified.submit` or private judgement APIs.
 - **Fallback chart source.** A strictly read-only network observer watches for
   `.osz` responses and parses the `.osu` entry itself with a bundled ZIP reader
   (`DecompressionStream("deflate-raw")`, no dependency). Requests are never
@@ -122,7 +124,8 @@ There is no second timeline, clock, scheduler, humanizer or input manager.
   (a head tap carrying the hold's end time, plus the hold). The head is dropped
   via a Set pre-pass that does not care which way the pair sorts. Ashtonk!mania
   stores one hold object, which the adapter converts to the same shape.
-- **Note scheduling** by a single look-ahead loop, not a timer per note.
+- **Note scheduling** by a single look-ahead loop, not a timer per note. The
+  scheduler retargets armed actions as Ashtonk playback speed changes.
 - **Taps, holds, chords, jacks and streams** are all classified, and the
   classification is surfaced: taps, holds, chord notes, largest chord, jacks,
   longest stream, peak and average NPS, and the shortest same-column interval.
@@ -169,7 +172,8 @@ See [Humanization in depth](#humanization-in-depth).
   dragging follows the pointer directly; reduced-motion preferences are
   respected. The UI prefers Torus when available and otherwise uses the bundled
   rounded Comfortaa font.
-- Start / pause / resume, stop, and emergency-stop controls.
+- Start / pause / resume, stop, and emergency-stop controls. Start can be armed
+  before the game loads; an opt-in auto-start switch is available under Timing.
 - Notes remaining, accuracy, combo and score — read from the site's own score
   system, not recomputed and not scraped from the Pixi HUD.
 - Live keyboard visualisation, timing sliders, humanization, keybinds, debug,
@@ -185,8 +189,8 @@ See [Humanization in depth](#humanization-in-depth).
   a page refresh, replay and results screens, and returning to song select. A new
   beatmap stops the old scheduler, clears the chart, re-detects, re-parses and
   resets stats.
-- Ashtonk!mania v2 deployments in **Practice mode only**, with ranked/online,
-  replay, spectate, `AT` and variable-rate modes explicitly refused.
+- Ashtonk!mania v2 gameplay, including normal, Practice, daily, multiplayer and
+  variable-speed mods. Replay, spectate and the built-in `AT` feed are refused.
 - Responsive, compact dark UI.
 
 ## Humanization in depth
@@ -242,7 +246,7 @@ one timestamp and construction order decides it.
 
 | Setting | Range | Default | What it does |
 |---|---|---|---|
-| Enable humanization | on/off | **off** | Master switch. Off means frame-exact. |
+| Enable humanization | on/off | **off** | Master switch. Off adds no timing variation. |
 | Seed | any non-negative integer | `0` | Same seed + same chart = identical timing. |
 | Strength | 0 – 1 | `0.35` | Scales every component. At 1 the per-note sd is 12ms. |
 | Distribution | gaussian / uniform | `gaussian` | Shape of the random component, variance-matched. |
@@ -306,8 +310,8 @@ Orchestration sits beside that pipeline, not inside it:
 | `ui/*` | Overlay, keyboard view, debug panel | Touching engine internals |
 | `core/settings` | Persistence, validation, clamping | Knowing what settings mean |
 
-Each layer only sees the types of the layer below it. Nothing downstream of
-`buildContext` ever touches a site object, which is what makes the detection
+Each layer uses the shared contracts of the layer below it. Downstream code
+uses `GameLike` rather than a site's native objects, which keeps detection
 strategies independently replaceable — see
 [`docs/UPDATING.md`](docs/UPDATING.md#step-3-add-a-new-detection-strategy).
 
@@ -391,8 +395,10 @@ no size limit and survives navigation.
 2. **Open Keyfall.** Press **Right Shift**. The panel starts hidden on every
    page load; the same key closes it. `Keyfall.version` and
    `Keyfall.diagnostics()` also work in the console.
-3. **Open a mania chart and start the play.** Detection is automatic; the overlay
-   reports the key and note counts. More! → Display shows the pattern breakdown.
+3. **Arm Start before the chart begins**, or opt in to **More! → Timing →
+   Auto-start detected charts**. Then open a mania chart. Detection is automatic;
+   the overlay reports the key and note counts. More! → Display shows the pattern
+   breakdown. Starting after a song has begun cannot recover past notes.
 4. **Check the key mapping.** More! → Input shows what was read from the site.
    The source should read `site`. If it says `fallback`, click a column and press
    the key you want.
@@ -400,26 +406,32 @@ no size limit and survives navigation.
    then correct for your output latency.
 6. **Optionally enable humanization.** More! → Humanize. Pick a seed, set a
    strength, and watch the statistics readout.
-7. **Start.** Press `G` or click START.
+7. **Start if not already armed.** Press `G` or click START. The engine waits
+   for the site to enter playable state before sending keys.
 8. **Monitor.** Status, notes remaining, accuracy, combo and score update live.
    The keyboard visualisation in More! → Display lights as columns are pressed.
    Press `Right Shift` once to hide the panel if it is in the way.
 9. **Stop or restart.** `X` stops and releases everything. `B` pauses and
    resumes. `Z` is the emergency stop — total reset, every key released,
-   detection re-armed. Changing beatmap needs no action: the new chart is picked
-   up without a refresh.
+   detection re-armed. A new beatmap is detected without a refresh and starts
+   automatically if auto-start is enabled.
 
-### Ashtonk!mania (Practice only)
+### Ashtonk!mania
 
-On the Ashtonk!mania host, open a map and start **Practice** (F4 or the song
-select context button), wait for the loader/countdown to finish, then press `G`
-or click START. The overlay reports `via: "ashtonkGlobal"` and
-`siteFamily: "ashtonkmania"` in diagnostics.
+Press `G` or click START **before launching the chart** to arm a single start, or
+opt in to **More! → Timing → Auto-start detected charts** to arm new charts
+automatically. Keyfall detects prepared notes while the loader is visible and
+waits for the game to become playable. Diagnostics report `via: "ashtonkGlobal"`
+and `siteFamily: "ashtonkmania"`. Stop, emergency stop, and disabling autoplay
+cancel an armed start. The panel shows **ARMED** while it waits; its primary
+button can also cancel the queued start. Auto-start is off by default and
+persists when enabled.
 
-Keyfall deliberately refuses normal/ranked play, multiplayer, daily challenges,
-replays, spectating, the site's `AT` Auto mod and Wind Up / Wind Down / Adaptive
-Speed. Practice plays do not call `Verified.submit`, so no automated score is
-submitted to ranked or online leaderboards. The site's own Auto is never used.
+Normal, Practice, daily, multiplayer and variable-speed sessions use the same
+scheduler. Replays, spectating and `AT` Auto are refused because their feeds
+consume gameplay input. The game's own scoring and submission logic still runs;
+Keyfall does not call a submission API itself and does not guarantee that a
+server will accept an automated play. Use automation responsibly.
 
 Ashtonk!mania installs gameplay key listeners on `window` capture; Keyfall's
 normal document-dispatched, bubbling synthetic events still reach them. Some
@@ -490,6 +502,7 @@ transient: it starts hidden each time and is toggled only with Right Shift.
 | Lookahead | 20 … 500 ms | How far ahead of the playhead to arm precise timers | `120 ms` |
 | Input delay | −100 … +100 ms | Extra lead to compensate for dispatch latency | `0 ms` |
 | Spin window | 0 … 25 ms | Bound on the busy-wait used for sub-millisecond placement | `6 ms` |
+| Auto-start detected charts | on/off | Arm new charts automatically; waits for playable state | Off |
 
 ### Humanize
 
@@ -530,11 +543,12 @@ stops an active run before replacing it; **Re-read from site** clears the overri
        Column 5 → J    Column 6 → K    Column 7 → L
 ```
 
-Fallback layouts exist for 1K through 10K+; beyond that, extended suffix codes
-are generated. **To change a mapping:** More! → Input → click a column → press
-the key. Overrides are stored per key count, so a 4K override does not affect 7K.
-A `fallback` source means the site's keybinds could not be read — the tool still
-plays, but you should set the mapping manually.
+Fallback layouts exist for 1K through 18K. **To change a mapping:** More! →
+Input → click a column → press the key. Overrides are stored per key count, so
+a 4K override does not affect 7K. On Ashtonk!mania, the active `s.keyMap` takes
+precedence over saved site settings; a lane with no usable active keyboard key
+is reported instead of guessing. User overrides must still match the game's
+actual bindings.
 
 Each column can have two bindings on the site. `Use secondary keybind` presses
 both, which matters if your own setup expects it.
@@ -648,7 +662,7 @@ cosmetic bug: it drains HP, breaks the run, and persists into the next screen.
    the chart clock and force-releases past a 20s timeout.
 4. **Lifecycle listeners.** `visibilitychange`, `pagehide`, `beforeunload` and
    `blur` all release keys. A backgrounded tab gets throttled timers, which would
-   wreck scheduling, so the engine pauses and releases rather than firing late.
+   wreck scheduling, so hiding the tab safely stops playback rather than firing late.
 5. **Input-state verification.** After dispatching, our held set is compared
    against the site's own `pressedColumns`. A persistent mismatch means the
    keybinds changed underneath us, so the engine stops rather than playing garbage.
@@ -669,9 +683,9 @@ works from any phase, including mid-hold and during an error.
 No anti-cheat bypass. No detection evasion. No `isTrusted` spoofing — synthetic
 events are dispatched honestly and remain `isTrusted === false`. No browser
 security bypass. No credential theft. No cookie extraction (`document.cookie` is
-never read). No account manipulation. No score submission — the Ashtonk!mania
-adapter refuses every mode that would submit a ranked/online score. No network
-modification — the `.osz` observer is strictly read-only. No remote code
+never read). No direct account manipulation or score-submission API calls.
+The game can nevertheless submit scores from automated play through its normal
+flow. No network modification — the `.osz` observer is strictly read-only. No remote code
 execution. No memory manipulation.
 
 The honest limitation: any site that checked `event.isTrusted` would render this
@@ -689,14 +703,14 @@ Run `Keyfall.diagnostics()` and read top-down — each field points at one modul
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `site: "unknown"` | Not on a supported host | Load `webosumania.com` or `v2-ashtonkmania.lokaux.workers.dev`. The legacy message is `Web osu!mania not detected.` |
-| `via: null` | The game instance could not be reached | Start the play first; on Ashtonk!mania use Practice and wait for `loaderGone` |
+| `via: null` | The game or its prepared chart could not be reached | Launch a chart and check that the gameplay session and notes exist |
 | `chart: null` but `via` is set | The site's field names changed | [`docs/UPDATING.md`](docs/UPDATING.md) |
 | Refuses, mentions autoplay | The site's own Autoplay mod is on | Turn it off — Keyfall will not double-fire against it |
 | Refuses, mentions replay | A replay / `s.feed` is playing | The site's replay feed already drives input |
-| Refuses, mentions Practice mode | Ashtonk!mania normal, ranked, multiplayer or daily play | Start the map with Practice (F4); automated scores are not submitted |
-| `via: "ashtonkGlobal"` but no notes | Practice session not started or loader not finished | Wait for gameplay; check `window.AshtonkMania.GameplayScreen.s.engine.notes` |
+| Refuses, mentions a missing keyboard binding | The active Ashtonk lane has no usable keyboard code | Bind a keyboard key to that lane in the game and retry |
+| `via: "ashtonkGlobal"` but no notes | The prepared session is unavailable | Check `window.AshtonkMania.GameplayScreen.s.engine.notes` |
 | Refuses, mentions random | The `random` mod is on and the fallback parser is in use | Disable `random`, or play from the live game path |
-| START does nothing | No chart detected yet | Check the overlay notice; a failed beatmap download leaves nothing to parse |
+| Status is `ARMED` | No playable chart yet | Wait for gameplay or cancel the queued start. A failed download leaves nothing to parse |
 
 If `via` is null while a map is playing:
 
@@ -760,7 +774,7 @@ npm run demo       # sandbox at http://localhost:5173/
 
 **Requirements:** Node 20+ to build; Node 22.18+ to run the native TypeScript
 tests and `npm run verify`. The dev dependencies are `esbuild`, `typescript`,
-and `playwright-core` (for the optional real-browser motion test). The shipped
+and `playwright-core` (for optional real-browser tests). The shipped
 bundle has zero runtime dependencies.
 
 Tests run on `node --test` with Node's native type stripping: no test framework
@@ -783,6 +797,11 @@ Chrome/Chromium executable (or use an already installed Playwright Chromium).
 `KEYFALL_DEMO_URL` can select another demo URL. The check exercises interrupted
 transitions, native slider keyboard/drag behavior, scaled tab resizing, window
 movement and dynamic reduced-motion changes; it does not play a live game.
+
+For the optional offline test against the actual Ashtonk!mania game, see the
+[Ashtonk!mania contract](docs/ASHTONK-CONTRACT.md#offline-browser-regression).
+It requires a separate local game checkout and Chromium; it never contacts a
+live server or submits scores.
 
 **Run the smoke test after any change.** It loads the actual bundled bytes through
 the real bootstrap path. That is how the hold-head bug in
@@ -847,8 +866,8 @@ exercised end to end without the live site.
 
 1. **Fork** the repository and create a branch from `main`.
 2. **Make the change.** Keep it in the layer it belongs to — a detection problem
-   is fixed in `detect/`, a timing problem in `timing/`. Nothing downstream of
-   `buildContext` should ever touch a site object.
+   is fixed in `detect/`, a timing problem in `timing/`. Downstream code should
+   use the shared `GameLike` contract, not native site objects.
 3. **Add a test.** If you changed timing or ordering behaviour, this is not
    optional. The two hardest bugs in this codebase were both invisible in manual
    testing and obvious under the stubbed clock.
@@ -882,8 +901,8 @@ kilobyte and every global it touches is a cost.
     Debug mode with a structured snapshot and buffered log
     Multi-layer stuck-key prevention and safe-stop guarantees
     SPA survival: beatmap change, gameplay close, replay and results screens
-    Multi-site Ashtonk!mania adapter, Practice-only fair-play gate
-    275 tests plus a 60-check shipped-bundle smoke test
+    Multi-site Ashtonk!mania adapter, active bindings and variable-speed scheduling
+    Unit/integration tests, shipped-bundle smoke test and optional browser checks
     Sandbox demo harness
 
 [ ] Planned
@@ -906,12 +925,11 @@ osu!mania, or Ashtonk!mania**, and no claim of official status is made or
 implied. osu! and osu!mania are the property of their respective owners; both
 games are third-party browser implementations.
 
-Use it responsibly. Ashtonk!mania has ranked and online leaderboards, so Keyfall
-is limited there to Practice mode and refuses every mode that would submit a
-score. Web osu!mania's score policy may change by deployment; do not submit an
-automated score to any ranked or shared leaderboard, and do not claim one as
-your own. Every synthetic event remains `isTrusted === false`; humanization is
-not detection evasion. See [`docs/SAFETY.md`](docs/SAFETY.md).
+Use it responsibly. Ashtonk!mania has ranked and online leaderboards, and its
+normal game flow may submit an automated play. Server acceptance has not been
+tested. Do not submit or claim automated leaderboard scores as your own; follow
+the relevant site's rules. Every synthetic event remains `isTrusted === false`;
+humanization is not detection evasion. See [`docs/SAFETY.md`](docs/SAFETY.md).
 
 If you simply want to watch a map played perfectly, use the site's own Autoplay
 mod. It is the developer's sanctioned feature and it is better at that job than

@@ -46,8 +46,9 @@ Consequences for Keyfall:
   the honest limit of browser-side automation: a determined anti-cheat could
   detect this trivially. See `docs/SAFETY.md`.
 - Because the site listens on `document` in the bubble phase, our hotkeys are
-  handled in the **capture** phase with `stopPropagation()` so a hotkey never
-  also registers as a column hit.
+  handled on `window` capture with `stopImmediatePropagation()` before the site
+  sees them. The same location also makes emergency stop reachable through
+  Ashtonk!mania's window-capture handler; avoid colliding hotkeys regardless.
 
 ## 2. Column resolution uses `event.code`
 

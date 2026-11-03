@@ -13,9 +13,11 @@ import { listen } from "./ui/dom";
  *     `event.isTrusted` is the clean discriminator: real user input is trusted,
  *     script-generated input is not.
  *
- *  2. Capture phase + `stopPropagation`. The site's `InputSystem` listens on
- *     `document` in the bubble phase, so handling in capture and stopping
- *     propagation prevents a hotkey from also registering as a column hit.
+ *  2. Window capture + `stopImmediatePropagation`. Web osu!mania listens on
+ *     document, while Ashtonk!mania listens on window capture and stops lane
+ *     events there. Listening on window keeps stop/emergency hotkeys reachable
+ *     even when a high-key layout uses the same code. Collision warnings still
+ *     matter: if injected after the game's listener, it may see the key first.
  *
  * Collisions with the site's keybinds are detected and surfaced rather than
  * silently misbehaving.
@@ -62,7 +64,7 @@ export class HotkeyManager {
   install(): void {
     if (this.disposer) return;
     this.disposer = listen(
-      document,
+      window,
       "keydown",
       (event) => this.onKeyDown(event as KeyboardEvent),
       { capture: true },
@@ -88,7 +90,7 @@ export class HotkeyManager {
     }
 
     event.preventDefault();
-    // Stop other listeners on this document too (not only ancestors).
+    // Stop later listeners on window too, not only propagation to document.
     if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
     else event.stopPropagation();
     this.hooks.onAction(action);

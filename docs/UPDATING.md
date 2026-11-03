@@ -45,7 +45,7 @@ window.__PIXI_APP__            // WOM sets this during play
 document.querySelectorAll("canvas").length
 ```
 
-On Ashtonk!mania, check the exported app and live practice session:
+On Ashtonk!mania, check the exported app and live gameplay session:
 
 ```js
 window.AshtonkMania?.GameplayScreen?.s
@@ -54,8 +54,9 @@ window.AshtonkMania?.GameplayScreen?.loaderGone
 window.AshtonkMania?.GameplayScreen?.s?.engine?.notes?.length
 ```
 
-`via` stays null before `loaderGone`, outside the gameplay screen, after a
-finished/failed play, or when the session is not in Practice mode.
+`via` stays null outside gameplay, after a finished/failed play, or before the
+session has prepared its notes. Keyfall can acquire a prepared chart before
+`loaderGone`; it waits for `PLAY` before sending input.
 
 If the global is gone, strategy 2 (viewport-sized canvas → fiber) should still
 work. If React changed its internals, check the fiber key prefix:
@@ -84,12 +85,15 @@ game.settings.keybinds.keyModes
 game.mods.autoplay
 game.replayPlayer
 game.chartSignature     // adapter-supplied structural identity
-game.unsupportedReason  // adapter policy refusal
+game.chartTimeAtHost    // optional judgement-clock prediction
+game.unsupportedReason  // adapter input conflict
 game.metadata           // optional chart label fields
 ```
 
 If `unsupportedReason` is set, `buildContextFromGame` refuses before parsing.
-On Ashtonk!mania that is intentional for ranked/online/replay/Auto modes.
+On Ashtonk!mania that is intentional for replay/spectate/Auto feeds and lanes
+without a usable keyboard binding; normal, daily and multiplayer modes are not
+refused merely for their mode.
 
 Each has a fallback (`readKeyCount` tries `difficulty`, then
 `columnKeybinds.length`, then `inputSystem.pressedColumns.length`). Update the
@@ -138,8 +142,9 @@ Keyfall.diagnostics().clock
 - `confident: false` after several seconds → the fit is not converging. Check
   `slope`: it should equal the playback rate (1 at normal speed). A slope of 1
   when the site is at 1.5× means `timeElapsed` stopped following `song.seek()`.
-- `errorMs` large (>10) → the two clocks are not linearly related any more.
-  Look at what the site now uses for `timeElapsed`.
+- `errorMs` large (>10) → inspect what the site uses for `timeElapsed`. A
+  changing-rate mod can also produce a larger residual in the linear fallback;
+  Ashtonk's arbitrary-host `inputTime` prediction should follow the live slope.
 - `discontinuities` climbing steadily → something is being misread as a seek.
   Check the thresholds at the top of `timing/clock.ts`.
 
@@ -201,7 +206,7 @@ in the adapter's `unsupportedReason`; do not add engine-level exceptions.
 ## Step 4: verify
 
 ```bash
-npm run verify     # typecheck + 275 tests + 60-check shipped-bundle smoke test
+npm run verify     # typecheck + unit/integration tests + shipped-bundle smoke test
 ```
 
 If you changed timing or ordering behaviour, add a test. The two bugs that were
@@ -223,11 +228,12 @@ Then check by hand against the real site, in this order:
 9. Enable humanization at strength 1 with hold-release variation and fatigue at
    maximum, on the densest chart you have. Confirm no stuck key and that every
    press is matched by a release.
-10. On Ashtonk!mania, repeat the basic chart checks in **Practice** mode only.
-    Confirm normal/ranked, multiplayer, daily, replay, spectate, `AT` and
-    variable-rate modes are refused with a readable notice, and that no score is
-    submitted. Confirm windows-capture input works and high-key hotkey
-    collisions are surfaced.
+10. On Ashtonk!mania, check normal, Practice and changing-rate gameplay, active
+    bindings, early arming and high-key hotkey collisions. Replay, spectate and
+    `AT` feeds should still be refused. The optional offline Chromium suite is
+    documented in [`ASHTONK-CONTRACT.md`](./ASHTONK-CONTRACT.md#offline-browser-regression).
+    Its daily and multiplayer cases are local fixtures, not online sessions; the
+    game may submit scores on a real server, so follow that site's rules.
 
 ## Reference
 

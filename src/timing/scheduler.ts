@@ -133,11 +133,13 @@ export function createFastTask(): FastTask {
     schedule(fn, delayMs) {
       const id = nextId++;
       pending.set(id, fn);
-      if (delayMs <= 0) {
-        // No delay: post immediately, skipping the timer entirely.
+      if (delayMs <= 0 && channel) {
+        // Post immediately, skipping the timer entirely.
         run(id);
       } else {
-        timers.set(id, setTimeout(() => run(id), delayMs) as unknown as number);
+        // Without MessageChannel, even the zero-delay fallback must be
+        // asynchronous so callers can store and cancel the returned handle.
+        timers.set(id, setTimeout(() => run(id), Math.max(0, delayMs)) as unknown as number);
       }
       return id;
     },
@@ -191,6 +193,9 @@ export class Scheduler {
   private frameHandle: number | null = null;
   private armedHandle: number | null = null;
   private armedBatchIndex = -1;
+  private armedHostTime = Number.NaN;
+  /** Invalidates a canceled callback even if it was already queued. */
+  private armedToken = 0;
 
   /** Invalidates every outstanding timer. Bumped on stop/pause/rebase. */
   private epoch = 0;
@@ -392,11 +397,30 @@ export class Scheduler {
   }
 
   private clearArmed(): void {
+    this.armedToken++;
     if (this.armedHandle !== null) {
       this.opts.cancelTask(this.armedHandle);
       this.armedHandle = null;
     }
     this.armedBatchIndex = -1;
+    this.armedHostTime = Number.NaN;
+  }
+
+  private armBatch(batchIndex: number, predictedHost: number): void {
+    const epoch = this.epoch;
+    const token = ++this.armedToken;
+    this.armedBatchIndex = batchIndex;
+    this.armedHostTime = predictedHost;
+    const delay = Math.max(0, predictedHost - this.now() - this.opts.spinThreshold);
+    this.armedHandle = this.opts.scheduleTask(() => {
+      // Cancellation can race a callback already queued by the browser. Do not
+      // let that stale callback clear or fire its replacement timer.
+      if (token !== this.armedToken) return;
+      this.armedHandle = null;
+      this.armedBatchIndex = -1;
+      this.armedHostTime = Number.NaN;
+      this.onArmedFired(epoch, batchIndex);
+    }, delay);
   }
 
   private tick(_frameTime: number): void {
@@ -431,6 +455,9 @@ export class Scheduler {
     // --- Catch-up: flush anything already due -------------------------
     let flushed = 0;
     while (this.cursor < this.actions.length && this.dueTime(this.cursor) <= chartNow) {
+      // Catch-up can beat an armed timer after a clock change or frame stall.
+      // Cancel it before advancing so it cannot block the next batch.
+      if (this.armedHandle !== null) this.clearArmed();
       const batch = this.takeBatchAtCursor();
       // Only fire a bounded number of overdue actions. Beyond that the tab
       // clearly stalled (or a seek happened) and firing them all would jam
@@ -444,6 +471,7 @@ export class Scheduler {
       }
       this.dispatch(batch, hostNow, chartNow, true);
       flushed += batch.length;
+      if (!this.running || this.paused) return;
     }
 
     if (this.cursor >= this.actions.length) {
@@ -452,21 +480,16 @@ export class Scheduler {
     }
 
     // --- Arm the next batch ------------------------------------------
-    if (this.armedHandle === null) {
-      const nextTime = this.dueTime(this.cursor);
-      const predictedHost = this.hooks.hostTimeFor(nextTime);
-      const lead = predictedHost - this.now();
-
-      if (lead <= this.opts.lookahead) {
-        this.armedBatchIndex = this.cursor;
-        const delay = Math.max(0, lead - this.opts.spinThreshold);
-        const epoch = this.epoch;
-
-        this.armedHandle = this.opts.scheduleTask(() => {
-          this.armedHandle = null;
-          this.onArmedFired(epoch, this.armedBatchIndex);
-        }, delay);
-      }
+    const predictedHost = this.hooks.hostTimeFor(this.dueTime(this.cursor));
+    if (this.armedHandle !== null &&
+        (this.armedBatchIndex !== this.cursor || predictedHost < this.armedHostTime - 1)) {
+      // Acceleration can move an already-armed deadline earlier. Later
+      // predictions are rechecked when the current timer wakes up.
+      this.clearArmed();
+    }
+    if (this.armedHandle === null && Number.isFinite(predictedHost) &&
+        predictedHost - this.now() <= this.opts.lookahead) {
+      this.armBatch(this.cursor, predictedHost);
     }
 
     this.scheduleFrame();
@@ -491,19 +514,14 @@ export class Scheduler {
 
     const target = this.dueTime(batchIndex);
     const predictedHost = this.hooks.hostTimeFor(target);
+    // A temporarily unavailable clock must not turn NaN into an early press.
+    // The next animation frame will retry or catch up once the clock recovers.
+    if (!Number.isFinite(predictedHost)) return;
     const remaining = predictedHost - this.now();
 
     // Not due yet (clock model is conservative): re-arm for the remainder.
     if (remaining > this.opts.spinThreshold) {
-      const epochNow = this.epoch;
-      this.armedBatchIndex = batchIndex;
-      this.armedHandle = this.opts.scheduleTask(
-        () => {
-          this.armedHandle = null;
-          this.onArmedFired(epochNow, batchIndex);
-        },
-        remaining - this.opts.spinThreshold,
-      );
+      this.armBatch(batchIndex, predictedHost);
       return;
     }
 

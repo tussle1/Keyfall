@@ -1,4 +1,4 @@
-import { ASHTONK_APP_GLOBAL } from "../constants";
+import { ASHTONK_APP_GLOBAL, MAX_KEY_COUNT, MIN_KEY_COUNT } from "../constants";
 import { hashString } from "../util/helpers";
 import type {
   ColumnKeybind,
@@ -21,9 +21,9 @@ import type {
  * replay playback, `Verified.submit`, score submission, or private judgement
  * engine. All gameplay input still leaves through ordinary `KeyboardEvent`s.
  *
- * Ashtonk!mania has ranked, multiplayer and daily-challenge leaderboards, so the
- * adapter deliberately exposes only **Practice** sessions. Normal/online modes
- * are reported as unsupported with a readable reason rather than being played.
+ * Normal, Practice, multiplayer and daily sessions use the same keyboard
+ * path. Replay, spectating and built-in Auto feeds are incompatible because
+ * the game ignores gameplay keyboard input while a feed drives the session.
  */
 
 type UnknownRecord = Record<string, unknown>;
@@ -185,7 +185,9 @@ function hasStarted(
   s: AshtonkSession | null,
 ): boolean {
   if (!screen || !s) return false;
-  if (screen.loaderGone === true) return true;
+  // When present, this is the same gate onKeyDown checks before lane input.
+  // Running audio or a countdown alone cannot make input playable yet.
+  if (typeof screen.loaderGone === "boolean") return screen.loaderGone;
   if (s.running === true || screen.cdEl != null) return true;
   return api?.Music?.playing === true;
 }
@@ -201,11 +203,7 @@ function replayActive(s: AshtonkSession | null): boolean {
   return Boolean(s.replay || s.spectate || s.feed);
 }
 
-/**
- * Reasons for refusing a live session. These are policy gates, not detection
- * failures: the adapter still returns a `GameLike` so the overlay can show why
- * Keyfall will not produce input.
- */
+/** Report input conflicts so the overlay can explain why playback cannot work. */
 function unsupportedReason(
   api: AshtonkApi | null,
   screen: AshtonkScreen | null,
@@ -216,16 +214,15 @@ function unsupportedReason(
     return "The site's built-in Auto / skin-editor autoplay is active. Disable it; Keyfall uses its own keyboard-event autoplay instead.";
   }
   if (replayActive(s)) {
-    return "A replay, spectated play or generated feed is already driving input. Keyfall refuses to take over a replay.";
+    return "A replay, spectated play or generated feed is already driving input. Keyfall cannot take over that feed.";
   }
-  if (s.mp || screen.params?.mp || screen.params?.daily) {
-    return "Ranked, multiplayer and daily-challenge plays are not automated. Use Ashtonk!mania Practice mode.";
-  }
-  if (s.ramp || s.adaptive) {
-    return "Wind Up / Wind Down / Adaptive Speed change the clock non-linearly. Use a constant speed in Practice mode.";
-  }
-  if (s.practice !== true && s.mode !== "practice") {
-    return "On Ashtonk!mania, Keyfall is limited to Practice mode so automated scores are never submitted to ranked or online leaderboards. Start the map with Practice (F4).";
+  const keys = Math.trunc(numberOr(s.keys, 0));
+  if (s.keyMap && keys >= MIN_KEY_COUNT && keys <= MAX_KEY_COUNT) {
+    const missing = readKeybinds(api, s, keys)
+      .flatMap((pair, col) => pair[0] ? [] : [col + 1]);
+    if (missing.length) {
+      return `No active keyboard binding for lane${missing.length === 1 ? "" : "s"} ${missing.join(", ")}. Bind a keyboard key to each lane in Ashtonk!mania.`;
+    }
   }
   return null;
 }
@@ -272,7 +269,9 @@ function isKeyboardCode(code: unknown): code is string {
     typeof code === "string" &&
     code.length > 0 &&
     !code.startsWith("🎮") &&
-    !/^Pad\d+$/.test(code)
+    !/^Pad\d+$/.test(code) &&
+    // Ashtonk consumes these before checking the lane keyMap.
+    !["Escape", "Backquote", "Tab", "F3", "F4"].includes(code)
   );
 }
 
@@ -281,7 +280,7 @@ function readKeybinds(
   s: AshtonkSession | null,
   keyCount: number,
 ): ColumnKeybind[] {
-  const columns: string[][] = Array.from({ length: Math.max(0, keyCount) }, () => []);
+  const configured: string[][] = Array.from({ length: Math.max(0, keyCount) }, () => []);
   let raw: unknown = null;
   try {
     raw = api?.Settings?.keybinds?.(keyCount);
@@ -289,46 +288,40 @@ function readKeybinds(
     // A settings API change should degrade to the session's keyMap, not throw.
   }
   if (Array.isArray(raw)) {
-    for (let col = 0; col < columns.length; col++) {
+    for (let col = 0; col < configured.length; col++) {
       const value = raw[col];
-      if (Array.isArray(value)) columns[col] = value.filter(isKeyboardCode);
-      else if (isKeyboardCode(value)) columns[col] = [value];
+      if (Array.isArray(value)) configured[col] = value.filter(isKeyboardCode);
+      else if (isKeyboardCode(value)) configured[col] = [value];
     }
   }
 
-  // `s.keyMap` is the authoritative code -> column map actually used by input.
-  // It also covers custom secondary binds and gamepad-only columns.
+  // The session's keyMap is what the active keyboard handler actually uses.
+  // Settings may have changed since the play began, so never prefer a saved
+  // binding the live map no longer accepts. Preserve the site's preferred
+  // primary/secondary order where those codes are still active.
+  const mapped: string[][] = Array.from({ length: configured.length }, () => []);
   const keyMap = s?.keyMap;
-  if (keyMap) {
-    if (typeof (keyMap as Map<string, number>).forEach === "function") {
-      (keyMap as Map<string, number>).forEach((col, code) => {
-        if (
-          isKeyboardCode(code) &&
-          Number.isInteger(col) &&
-          col >= 0 &&
-          col < columns.length &&
-          !columns[col].includes(code)
-        ) {
-          columns[col].push(code);
-        }
-      });
-    } else if (isRecord(keyMap)) {
-      for (const [code, colValue] of Object.entries(keyMap)) {
-        const col = numberOr(colValue, Number.NaN);
-        if (
-          isKeyboardCode(code) &&
-          Number.isInteger(col) &&
-          col >= 0 &&
-          col < columns.length &&
-          !columns[col].includes(code)
-        ) {
-          columns[col].push(code);
-        }
-      }
+  let hasLiveMap = false;
+  const add = (code: unknown, colValue: unknown): void => {
+    const col = numberOr(colValue, Number.NaN);
+    if (isKeyboardCode(code) && Number.isInteger(col) && col >= 0 && col < mapped.length && !mapped[col].includes(code)) {
+      mapped[col].push(code);
     }
+  };
+  if (keyMap && typeof (keyMap as Map<string, number>).forEach === "function") {
+    hasLiveMap = true;
+    (keyMap as Map<string, number>).forEach((col, code) => add(code, col));
+  } else if (isRecord(keyMap)) {
+    hasLiveMap = true;
+    for (const [code, col] of Object.entries(keyMap)) add(code, col);
   }
 
-  return columns.map((codes): ColumnKeybind => [codes[0] ?? null, codes[1] ?? null]);
+  return configured.map((preferred, col): ColumnKeybind => {
+    const codes = hasLiveMap
+      ? [...preferred.filter((code) => mapped[col].includes(code)), ...mapped[col].filter((code) => !preferred.includes(code))]
+      : preferred;
+    return [codes[0] ?? null, codes[1] ?? null];
+  });
 }
 
 function readScoreSystem(s: AshtonkSession | null): Record<string, unknown> | null {
@@ -454,7 +447,8 @@ function readChartSignature(s: AshtonkSession | null): string {
       s?.keys ?? 0,
       mods,
       s?.seed ?? 0,
-      s?.rate ?? 1,
+      // Playback speed changes during Wind Up/Down and Adaptive Speed; it is
+      // not chart identity and must not restart the timeline.
       s?.loopA ?? "",
       s?.loopB ?? "",
       engineId(s?.engine),
@@ -501,6 +495,18 @@ function createAdapter(win: Window): GameLike {
     get timeElapsed(): number {
       const { api, screen, s } = liveContext(win);
       return readChartTime(win, api, screen, s);
+    },
+
+    chartTimeAtHost(hostTime: number): number | null {
+      const { screen, s } = liveContext(win);
+      if (!s || typeof screen?.inputTime !== "function" || !Number.isFinite(hostTime)) return null;
+      try {
+        const time = screen.inputTime({ timeStamp: hostTime });
+        return Number.isFinite(time) ? time : null;
+      } catch {
+        // The engine will fall back to its continuously fitted clock model.
+        return null;
+      }
     },
 
     get startTime(): number {
@@ -600,9 +606,9 @@ function createAdapter(win: Window): GameLike {
 }
 
 /**
- * Acquire a live, started gameplay session. Unsupported modes still return an
- * adapter (with `unsupportedReason`) so the UI can explain the refusal instead
- * of silently showing "no gameplay detected".
+ * Acquire a prepared gameplay session, including its loader. Input still waits
+ * for the site to enter PLAY. Conflicting feeds return an adapter with a reason
+ * so the UI can explain the refusal instead of showing no gameplay.
  */
 export function acquireAshtonkGame(win: Window): GameLike | null {
   const { api, screen, s } = liveContext(win);
@@ -612,7 +618,7 @@ export function acquireAshtonkGame(win: Window): GameLike | null {
     !s ||
     s.finished ||
     s.failed ||
-    !hasStarted(api, screen, s)
+    (!hasStarted(api, screen, s) && !(Array.isArray(s.engine?.notes) && s.engine.notes.length > 0))
   ) {
     return null;
   }

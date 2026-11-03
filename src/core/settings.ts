@@ -144,6 +144,7 @@ export class SettingsManager {
     out.appearance.collapsed = !!out.appearance.collapsed;
 
     out.general.enabled = out.general.enabled !== false;
+    out.general.autoStart = out.general.autoStart === true;
     // Kept only for backward-compatible storage. Visibility is transient and
     // no persisted flag can open the panel without Right Shift.
     out.general.showOverlay = !!out.general.showOverlay;
