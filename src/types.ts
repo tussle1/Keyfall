@@ -76,7 +76,21 @@ export interface GameLike {
     hit?: (column: number, time?: number) => void;
     release?: (column: number, time?: number) => void;
   };
-  scoreSystem?: Record<string, unknown>;
+  scoreSystem?: Record<string, unknown> | null;
+  /** Site-provided beatmap metadata, used only for the overlay's chart label. */
+  metadata?: { title?: string; artist?: string; version?: string };
+  /** Optional cheap liveness probe, avoiding conversion of a site's full chart. */
+  hasHitObjects?: boolean;
+  /** Cheap identity for session/engine/array replacements, not in-place note edits. */
+  chartRevision?: string;
+  /** Optional adapter-supplied structural fingerprint for the active chart. */
+  chartSignature?: string;
+  /** Optional read-only judgement clock at a performance.now() timestamp. */
+  chartTimeAtHost?: (hostTime: number) => number | null;
+  /** Set when a site adapter cannot drive the current input path. */
+  unsupportedReason?: string;
+  /** Present while a site replay is driving input. */
+  replayPlayer?: unknown;
   accuracyText?: { text?: string } | null;
   comboText?: { text?: string } | null;
   scoreText?: { text?: string } | null;
@@ -116,7 +130,7 @@ export interface InputAction {
    * same-frame simultaneous inputs in a deterministic order.
    */
   simultaneous: boolean;
-  /** For `up` actions on holds: the hold's duration in ms. 0 for taps. */
+  /** For hold edges: the hold's original duration in ms. 0 for taps. */
   holdDuration: number;
 }
 
@@ -166,6 +180,9 @@ export type HotkeyAction =
 export interface Settings {
   general: {
     enabled: boolean;
+    /** Opt in to starting on each newly detected playable chart. */
+    autoStart: boolean;
+    /** Legacy stored value; visibility is controlled only by Right Shift. */
     showOverlay: boolean;
     showKeyboard: boolean;
     debug: boolean;
@@ -173,7 +190,7 @@ export interface Settings {
   timing: {
     /** Applied to every scheduled action. Negative = earlier. ms. */
     offset: number;
-    /** How far ahead of the playhead to arm precise timers. ms. */
+    /** Maximum interval between deadline rechecks over long gaps, in ms. */
     lookahead: number;
     /** Extra lead applied to compensate for dispatch latency. ms. */
     inputDelayCompensation: number;
@@ -192,6 +209,7 @@ export interface Settings {
     opacity: number;
     accent: string;
     position: { x: number; y: number };
+    /** Legacy stored value; the trainer panel no longer has a mini-bar. */
     collapsed: boolean;
     size: { w: number; h: number };
   };

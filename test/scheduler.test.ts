@@ -5,10 +5,11 @@ import { Scheduler, createFastTask } from "../src/timing/scheduler";
 import type { InputAction } from "../src/types";
 
 /** A fully controllable clock + task queue, so timing is exact not flaky. */
-function harness(options: { lookahead?: number; spinThreshold?: number } = {}) {
+function harness(options: { lookahead?: number; spinThreshold?: number; ignoreCancel?: boolean } = {}) {
   let now = 0;
   let chart = 0;
   let slope = 1; // chart ms per host ms
+  let predictionAvailable = true;
 
   interface Task {
     at: number;
@@ -24,7 +25,7 @@ function harness(options: { lookahead?: number; spinThreshold?: number } = {}) {
   // A real clock model, wired exactly as the engine wires it: it decides
   // whether a jump was a seek, and the scheduler acts on that decision.
   const clock = new ClockMapper();
-  const overruns: Array<{ dropped: number; at: number }> = [];
+  const overruns: Array<{ dropped: number; at: number; skipped: InputAction[] }> = [];
   let completed = 0;
 
   const actions: InputAction[] = [];
@@ -32,13 +33,13 @@ function harness(options: { lookahead?: number; spinThreshold?: number } = {}) {
   const scheduler = new Scheduler(
     {
       nowChart: () => chart,
-      hostTimeFor: (chartTime) => (chartTime - chart) / slope + now,
+      hostTimeFor: (chartTime) => predictionAvailable ? (chartTime - chart) / slope + now : Number.NaN,
       fire: (batch, hostNow, target) => fired.push({ actions: batch, hostNow, target }),
       sample: (host, chartTime) => {
         samples.push({ host, chart: chartTime });
         if (clock.sample(host, chartTime)) return chartTime;
       },
-      onOverrun: (dropped, at) => overruns.push({ dropped, at }),
+      onOverrun: (dropped, at, skipped) => overruns.push({ dropped, at, skipped: [...skipped] }),
       onComplete: () => completed++,
     },
     {
@@ -57,7 +58,7 @@ function harness(options: { lookahead?: number; spinThreshold?: number } = {}) {
       },
       cancelTask: (id) => {
         const index = tasks.findIndex((t) => t.id === id);
-        if (index >= 0) tasks.splice(index, 1);
+        if (index >= 0 && !options.ignoreCancel) tasks.splice(index, 1);
       },
       requestFrame: (cb) => {
         frames.push(cb);
@@ -122,6 +123,45 @@ function harness(options: { lookahead?: number; spinThreshold?: number } = {}) {
     }
   }
 
+  /** Run browser timers while animation frames are delayed or absent. */
+  function advanceTimersOnly(ms: number): void {
+    const end = now + ms;
+    let guard = 0;
+    for (;;) {
+      if (++guard > 10_000) throw new Error("timer-only scheduler loop did not converge");
+      let index = -1;
+      let at = Infinity;
+      for (let i = 0; i < tasks.length; i++) {
+        if (tasks[i].at <= end && tasks[i].at < at) { at = tasks[i].at; index = i; }
+      }
+      if (index < 0) break;
+      const task = tasks.splice(index, 1)[0];
+      now = Math.max(now, at);
+      syncChart();
+      task.fn();
+    }
+    now = end;
+    syncChart();
+  }
+
+  /** A genuinely blocked main thread: wall time and audio advance, no callbacks run. */
+  function stall(ms: number): void {
+    now += ms;
+    syncChart();
+  }
+
+  function runFrame(): void {
+    const frame = frames.shift();
+    if (frame) frame(now);
+  }
+
+  function runDueTask(): void {
+    const index = tasks.findIndex((task) => task.at <= now);
+    if (index < 0) return;
+    const task = tasks.splice(index, 1)[0];
+    task.fn();
+  }
+
   /** Re-anchor the chart clock at the current host time (a seek). */
   function setChart(value: number): void {
     chartBase = value;
@@ -147,6 +187,10 @@ function harness(options: { lookahead?: number; spinThreshold?: number } = {}) {
       return completed;
     },
     advance,
+    advanceTimersOnly,
+    stall,
+    runFrame,
+    runDueTask,
     seek,
     setChart,
     get now() {
@@ -156,7 +200,14 @@ function harness(options: { lookahead?: number; spinThreshold?: number } = {}) {
       return chart;
     },
     set slope(value: number) {
+      // Rate changes preserve song position, just like the site's Music.rampTo.
+      syncChart();
+      chartBase = chart;
+      hostBase = now;
       slope = value;
+    },
+    set predictionAvailable(value: boolean) {
+      predictionAvailable = value;
     },
     get pendingTasks() {
       return tasks.length;
@@ -211,6 +262,30 @@ describe("Scheduler", () => {
     // At most a handful of timers armed at any moment, not 2000.
     assert.ok(h.pendingTasks < 8, `expected few pending tasks, got ${h.pendingTasks}`);
     assert.ok(h.fired.length > 0, "should have fired actions");
+  });
+
+  it("keeps precise timers moving when animation frames stall but the event loop is free", () => {
+    const h = harness();
+    h.scheduler.load([
+      act(0, 100, "down"), act(1, 120, "down"), act(2, 140, "down"),
+      act(3, 1000, "down"), act(4, 1300, "down"),
+    ], 0);
+    h.setChart(0); h.scheduler.start();
+    h.advance(16, 16); // the last animation frame before a long rendering stall
+    h.advanceTimersOnly(1400);
+    assert.deepEqual(h.fired.flatMap((batch) => batch.actions.map((action) => action.seq)), [0, 1, 2, 3, 4]);
+    for (const batch of h.fired) assert.ok(Math.abs(batch.hostNow - batch.target) < 1, `late batch at ${batch.hostNow}`);
+    h.runFrame();
+    assert.equal(h.completed, 1);
+  });
+
+  it("arms the initial note even if the first animation frame is delayed", () => {
+    const h = harness();
+    h.scheduler.load([act(0, 200, "down"), act(1, 400, "down")], 0);
+    h.setChart(0); h.scheduler.start();
+    h.advanceTimersOnly(500);
+    assert.deepEqual(h.fired.flatMap((batch) => batch.actions.map((action) => action.seq)), [0, 1]);
+    assert.ok(h.fired.every((batch) => Math.abs(batch.hostNow - batch.target) < 1));
   });
 
   it("fires nothing before the action time", () => {
@@ -280,6 +355,17 @@ describe("Scheduler", () => {
     assert.ok(seqs.includes(2), "the note after the pause still fires");
   });
 
+  it("rearms on resume even when the next animation frame is delayed", () => {
+    const h = harness();
+    h.scheduler.load([act(0, 100, "down"), act(1, 900, "down")], 0);
+    h.setChart(0); h.scheduler.start(); h.advance(150, 5);
+    h.scheduler.pause(); h.advanceTimersOnly(500);
+    assert.deepEqual(h.fired.flatMap((batch) => batch.actions.map((action) => action.seq)), [0]);
+    h.scheduler.resume(); h.advanceTimersOnly(400);
+    assert.deepEqual(h.fired.flatMap((batch) => batch.actions.map((action) => action.seq)), [0, 1]);
+    assert.equal(h.fired[1].hostNow, 900);
+  });
+
   it("catches up on overdue actions after a stall", () => {
     const h = harness();
     h.scheduler.load([act(0, 100, "down"), act(1, 120, "down"), act(2, 140, "down")], 0);
@@ -298,11 +384,161 @@ describe("Scheduler", () => {
     h.scheduler.load(timeline, 0);
     h.setChart(0);
     h.scheduler.start();
-    h.seek(5000);
-    h.advance(100, 100);
+    h.stall(5000);
+    h.runFrame();
 
     assert.ok(h.overruns.length > 0, "should report an overrun");
     assert.ok(h.scheduler.droppedCount > 0, "should count dropped actions");
+  });
+
+  for (const first of ["frame", "timer"] as const) {
+    it(`continues future notes after a blocked-thread backlog (${first} wakes first)`, () => {
+      const h = harness();
+      const timeline: InputAction[] = [];
+      for (let i = 0; i < 900; i++) timeline.push(act(i, 50 + i, "down"));
+      timeline.push(act(900, 2600, "down"), act(901, 2800, "down"));
+      h.scheduler.load(timeline, 0);
+      h.setChart(0);
+      h.scheduler.start();
+      h.advance(16, 16); // establish a clock sample and arm the first action
+      h.stall(2000); // audio advances but neither timer nor animation callback executes
+      if (first === "frame") h.runFrame();
+      else h.runDueTask();
+      assert.ok(h.scheduler.isRunning, "a lag spike must not complete the chart");
+      h.advance(900, 8);
+      const seqs = h.fired.flatMap((batch) => batch.actions.map((action) => action.seq));
+      assert.ok(seqs.includes(900) && seqs.includes(901), "future actions must remain queued");
+      assert.ok(h.overruns.length > 0);
+      assert.equal(h.overruns[0].skipped.length, h.overruns[0].dropped);
+      assert.ok(h.overruns[0].skipped.every((action) => action.time <= 2016));
+      assert.equal(h.scheduler.droppedCount, h.overruns.reduce((n, overrun) => n + overrun.dropped, 0));
+      assert.equal(h.completed, 1);
+    });
+  }
+
+  for (const offset of [-120, 100]) {
+    it(`preserves future deadlines with a ${offset}ms offset after a blocked-thread overrun`, () => {
+      const h = harness();
+      const timeline = Array.from({ length: 900 }, (_, i) => act(i, 150 + i, "down"));
+      timeline.push(act(900, 2600, "down"));
+      h.scheduler.setActionOffset(offset);
+      h.scheduler.load(timeline, 0); h.setChart(0); h.scheduler.start();
+      h.advance(16, 16); h.stall(2000); h.runDueTask();
+      assert.ok(h.overruns[0].skipped.every((action) => action.time + offset <= h.chart));
+      h.advance(900, 8);
+      const future = h.fired.find((batch) => batch.actions.some((action) => action.seq === 900));
+      assert.ok(future);
+      assert.ok(Math.abs(future.hostNow - (2600 + offset)) < 1, `future action at ${future.hostNow}`);
+    });
+  }
+
+  it("does not fire a queued timer after stop during a blocked-thread stall", () => {
+    const h = harness({ ignoreCancel: true });
+    h.scheduler.load([act(0, 100, "down"), act(1, 500, "down")], 0);
+    h.setChart(0); h.scheduler.start(); h.advance(16, 16);
+    h.stall(2000); h.scheduler.stop(); h.runDueTask(); h.runFrame();
+    assert.deepEqual(h.fired, []);
+    assert.equal(h.scheduler.isRunning, false);
+  });
+
+  it("never splits an oversized overdue chord or loses future actions", () => {
+    const h = harness();
+    const timeline = Array.from({ length: 300 }, (_, i) => act(i, 100, "down", i));
+    timeline.push(act(300, 1000, "down"));
+    h.scheduler.load(timeline, 0); h.setChart(0); h.scheduler.start();
+    h.advance(16, 16); h.stall(200); h.runFrame();
+    assert.equal(h.overruns[0]?.dropped, 300);
+    assert.equal(h.fired.length, 0, "the oversized chord is skipped as a whole");
+    h.advance(900, 8);
+    assert.deepEqual(h.fired.flatMap((batch) => batch.actions.map((action) => action.seq)), [300]);
+  });
+
+  it("cancels an armed batch when the live timeline is replaced", () => {
+    const h = harness();
+    h.scheduler.load([act(0, 1000, "down")], 0);
+    h.setChart(0);
+    h.scheduler.start();
+    h.advance(900, 5);
+    assert.equal(h.pendingTasks, 1, "the old note is armed");
+
+    h.scheduler.load([act(1, 950, "down")], h.chart);
+    assert.equal(h.pendingTasks, 0, "the old timer was canceled");
+    h.advance(75, 5);
+    assert.deepEqual(h.fired.flatMap((batch) => batch.actions.map((action) => action.seq)), [1]);
+    assert.ok(h.fired[0].hostNow <= 955, "the new earlier note was not delayed by the old timer");
+    h.scheduler.dispose();
+  });
+
+  it("moves an armed deadline earlier when the chart accelerates", () => {
+    const h = harness();
+    h.scheduler.load([act(0, 1000, "down"), act(1, 1050, "up"), act(2, 1100, "down")], 0);
+    h.setChart(0);
+    h.scheduler.start();
+    h.advance(900, 5);
+    assert.equal(h.pendingTasks, 1);
+    h.slope = 4;
+    h.advance(100, 5);
+
+    assert.deepEqual(h.fired.flatMap((b) => b.actions.map((a) => a.seq)), [0, 1, 2]);
+    assert.ok(Math.abs(h.fired[0].hostNow - 925) <= 1, `first note at ${h.fired[0].hostNow}`);
+    assert.ok(Math.abs(h.fired[1].hostNow - 937.5) <= 1, `second note at ${h.fired[1].hostNow}`);
+    assert.equal(h.scheduler.droppedCount, 0);
+  });
+
+  it("rechecks an armed deadline when the chart slows down", () => {
+    const h = harness();
+    h.scheduler.load([act(0, 1000, "down")], 0);
+    h.setChart(0);
+    h.scheduler.start();
+    h.advance(900, 5);
+    h.slope = 0.5;
+    h.advance(150, 5);
+    assert.equal(h.fired.length, 0, "the original timer must not fire early");
+    h.advance(75, 5);
+    assert.equal(h.fired.length, 1);
+    assert.ok(Math.abs(h.fired[0].hostNow - 1100) <= 1);
+  });
+
+  it("does not fire early if an armed deadline loses its clock prediction", () => {
+    const h = harness();
+    h.scheduler.load([act(0, 1000, "down")], 0);
+    h.setChart(0);
+    h.scheduler.start();
+    h.advance(900, 5);
+    assert.equal(h.pendingTasks, 1);
+    h.slope = 0.5;
+    h.predictionAvailable = false;
+    h.advance(110, 5); // old timer wakes at 1000, but chart is only at 950
+    assert.equal(h.fired.length, 0);
+    h.predictionAvailable = true;
+    h.advance(120, 5);
+    assert.equal(h.fired.length, 1);
+    assert.ok(Math.abs(h.fired[0].hostNow - 1100) <= 1);
+  });
+
+  it("cancels an obsolete armed timer when catch-up advances to another note", () => {
+    const h = harness();
+    h.scheduler.load([act(0, 1000, "down"), act(1, 1010, "up"), act(2, 1020, "down")], 0);
+    h.setChart(0);
+    h.scheduler.start();
+    h.advance(900, 5);
+    h.seek(995); // a modest clock jump that is not classified as a seek
+    h.advance(30, 10);
+    assert.deepEqual(h.fired.flatMap((b) => b.actions.map((a) => a.seq)), [0, 1, 2]);
+    assert.ok(h.fired[1].hostNow <= 916, `next note was delayed until ${h.fired[1].hostNow}`);
+  });
+
+  it("ignores canceled callbacks that have already entered the browser queue", () => {
+    const h = harness({ ignoreCancel: true });
+    h.scheduler.load([act(0, 1000, "down"), act(1, 1300, "up")], 0);
+    h.setChart(0);
+    h.scheduler.start();
+    h.advance(900, 5);
+    h.slope = 4;
+    h.advance(200, 5);
+    assert.deepEqual(h.fired.flatMap((b) => b.actions.map((a) => a.seq)), [0, 1]);
+    assert.ok(Math.abs(h.fired[1].hostNow - 1000) <= 1, "stale callback must not clear the new timer");
+    assert.equal(h.completed, 1);
   });
 
   it("stop clears the timeline and cancels timers", () => {
@@ -441,6 +677,24 @@ describe("createFastTask", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(ran, 1);
     fast.dispose();
+  });
+
+  it("uses an asynchronous, cancelable timer when MessageChannel is unavailable", async () => {
+    const original = globalThis.MessageChannel;
+    try {
+      (globalThis as any).MessageChannel = undefined;
+      const fast = createFastTask();
+      let ran = 0;
+      const canceled = fast.schedule(() => ran += 10, 0);
+      fast.cancel(canceled);
+      fast.schedule(() => ran++, 0);
+      assert.equal(ran, 0, "zero-delay fallback must not run synchronously");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(ran, 1);
+      fast.dispose();
+    } finally {
+      globalThis.MessageChannel = original;
+    }
   });
 
   it("keeps running after a task throws", async () => {

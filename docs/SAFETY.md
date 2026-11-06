@@ -2,9 +2,11 @@
 
 ## What Keyfall is
 
-Browser-side gameplay automation for a single-player rhythm game running in
+Browser-side gameplay automation for supported browser rhythm games running in
 your own browser tab. It reads the chart the page has already loaded and
-dispatches ordinary DOM `KeyboardEvent`s on `document`.
+dispatches ordinary DOM `KeyboardEvent`s on `document`. On Ashtonk!mania it can
+drive normal, Practice, multiplayer, daily and variable-speed gameplay, but
+refuses replay, spectate and Auto/AT feeds that do not accept gameplay keys.
 
 It is built entirely from standard, publicly documented browser APIs:
 `addEventListener`, `dispatchEvent`, `KeyboardEvent`, `performance.now`,
@@ -26,8 +28,9 @@ position Keyfall occupies:
 - **No credential or cookie access.** `document.cookie` is never read. No
   storage belonging to the site is read or written; the tool's own settings live
   under a single namespaced `localStorage` key.
-- **No account manipulation.** Nothing submits forms, calls authenticated
-  endpoints, or mutates site state.
+- **No direct account or score-submission calls.** Keyfall does not submit forms,
+  call authenticated endpoints or call `Verified.submit`. It does send gameplay
+  input, and the game may save or submit the resulting play through its own flow.
 - **No network modification.** The `.osz` sniffer is strictly read-only:
   responses are `clone()`d and observed, requests are never altered, blocked,
   delayed or replayed.
@@ -39,8 +42,8 @@ position Keyfall occupies:
 
 Every input Keyfall produces is `isTrusted === false`. Any site that checks
 `event.isTrusted` — a one-line change in `handleKeyDown` — renders this entire
-approach inert. Web osu!mania does not check it today, which is the only reason
-this works at all.
+approach inert. Neither supported site requires trusted keyboard events for the
+local input paths Keyfall uses today, which is the only reason this works at all.
 
 That asymmetry is worth stating plainly: Keyfall is not robust against a site
 author who decides they do not want it. It is a client-side convenience, not an
@@ -48,25 +51,21 @@ adversarial capability.
 
 ## Fair play
 
-Web osu!mania keeps **local** high scores. As far as the public source shows,
-there is no global leaderboard, no ranked submission and no multiplayer, so
-running this does not take anything from another player.
+Ashtonk!mania has ranked, multiplayer and daily-challenge leaderboards. Since
+Keyfall now drives those normal input paths, **the game may submit an automated
+play through its own score flow**, even though Keyfall does not call submission
+APIs. The offline tests do not establish whether a server would accept a play.
+Follow the site's rules: do not submit or claim automated leaderboard scores as
+your own, and do not use humanization to make an automated score look legitimate.
 
-That is the current state of the site, not a permanent property of it. Two
-things follow:
-
-1. **The site already ships an Autoplay mod** (Settings → Mods → Autoplay, backed
-   by `generateAutoReplay`). If you simply want to watch a map played perfectly,
-   use that. It is frame-exact, needs no timing model, and is the developer's
-   own sanctioned feature. This tool explicitly refuses to run while that mod is
-   enabled.
-2. If the site ever adds ranked or shared leaderboards, submitting a score
-   produced by automation would be cheating, and would also be trivially
-   detectable via `isTrusted`. Do not do it.
+Both supported sites ship their own Autoplay/Auto feature. If you simply want
+to watch a map played perfectly using the developer's sanctioned feature, use
+that instead. Keyfall explicitly refuses to run while either built-in Auto mod
+is enabled, and never calls `generateAutoReplay` or `generateAutoInputs`.
+Replay and spectate feeds are also incompatible with keyboard gameplay input.
 
 Use this for practice reference, pattern study, testing your own charts,
-accessibility, or watching a map you cannot yet play. Do not use it to claim a
-score as your own.
+accessibility, or watching a map you cannot yet play.
 
 ## Humanization is not evasion
 
@@ -89,8 +88,9 @@ evasion would want: two runs with the same seed produce byte-identical timing.
 That is a deliberate trade. Reproducibility is what makes a humanized run
 comparable, debuggable and worth studying; anything else would be noise.
 
-If a site ever added ranked or shared leaderboards, a humanized run would be no
-more legitimate than a frame-exact one, and no harder to detect.
+Ranked/shared leaderboards exist on Ashtonk!mania. A humanized run would be no
+more legitimate than a precise automated one, and no harder to detect; the game
+may submit it if a submitting mode is used.
 
 ## Runtime safety
 
@@ -106,13 +106,14 @@ breaks the run, and can persist into the next screen. Defences, in layers:
    path, because a failure between notes would otherwise go unnoticed with a
    hold still down. It covers `RUNNING`, `PAUSED` and `READY`: a play can fail
    after the last action, while the site transitions to its results screen.
-3. **A 500ms guards watchdog** (`engine/guards.ts`) cross-checks how long each
-   column has been held against the chart clock, and force-releases past
-   `STUCK_KEY_TIMEOUT`.
+3. **A 500ms guards watchdog** (`engine/guards.ts`) checks held keys against the
+   chart clock and queued releases. A genuine long hold with a future tail is not
+   treated as stuck. An overdue queued tail gets one cycle to recover if the
+   watchdog wakes first after a stall; unrecovered or unscheduled stuck keys still
+   trigger a release and safe stop.
 4. **Lifecycle listeners**: `visibilitychange`, `pagehide`, `beforeunload` and
-   `blur` all release keys. A backgrounded tab gets throttled timers, which
-   would wreck scheduling, so the engine pauses and releases rather than
-   firing late.
+   `blur` all release keys. A hidden tab gets throttled timers, so visibility
+   loss triggers a safe stop rather than continuing to fire late.
 5. **Input-state verification**: after dispatching, our held set is compared
    against the site's own `inputSystem.pressedColumns`. A persistent mismatch
    means the keybinds changed underneath us, so the engine stops instead of
@@ -120,10 +121,11 @@ breaks the run, and can persist into the next screen. Defences, in layers:
 6. **A stuck-key release even without a recorded press.** If the site believes a
    column is down and we have no record of pressing it, we dispatch the release
    anyway. A spurious `keyup` is harmless; a missing one is not.
-7. **Bounded everything.** The catch-up loop caps at
-   `MAX_CATCHUP_ACTIONS_PER_FRAME` and reports an overrun rather than jamming
-   every column at once. The precision spin-wait has both an absolute deadline
-   and an iteration cap, so a bad clock prediction cannot freeze the tab.
+7. **Bounded everything.** Catch-up keeps at most
+   `MAX_CATCHUP_ACTIONS_PER_FRAME` overdue actions, skipping older whole batches
+   while preserving future notes. Skipped hold releases are reconciled without
+   interrupting holds that are still active. The precision spin-wait has both an
+   absolute deadline and an iteration cap, so a bad clock cannot freeze the tab.
 8. **Errors never escape.** Every strategy, emitter subscriber, scheduled task
    and dispatch is wrapped; a throw degrades to a log line and a safe stop with
    `Autoplay stopped safely.`
@@ -134,12 +136,18 @@ breaks the run, and can persist into the next screen. Defences, in layers:
 |---|---|
 | Site adds an `isTrusted` check | Input silently stops registering; the desync verifier detects it within ~6 checks and stops safely with an explanatory message |
 | `random` mod enabled | Live-game path works. The `.osu` fallback path refuses, because the column permutation is generated at runtime and never persisted |
-| Site's Autoplay mod enabled | Refuses to start, with a message telling you to disable it |
-| A replay is playing | Refuses to start; the site's `ReplayPlayer` already drives input |
+| Site's Autoplay / `AT` mod enabled | Refuses to start, with a message telling you to disable it |
+| A replay is playing | Refuses to start; the site's `ReplayPlayer` / `s.feed` already drives input |
+| Ashtonk!mania normal, ranked, multiplayer or daily play | The game may submit the play; server acceptance is untested. Do not claim an automated leaderboard score |
+| Ashtonk!mania changing playback speed | The scheduler retargets using the current judgement clock; abrupt changes or a blocked main thread can still cause timing errors |
+| Main-thread lag spike | The scheduler resumes with the remaining chart and reconciles skipped hold releases. Notes whose judgement windows passed while JS was blocked cannot be recovered; the game may also fail the play |
+| Ashtonk!mania high-key layout collides with `G`/`B`/`X`/`Z` hotkeys | Collision warning is surfaced; rebind the hotkeys in More! → Input |
+| A prepared chart closes, is replaced or has an incompatible feed before starting | Its pending manual start is canceled; auto-start can arm the next valid chart only if enabled |
+| The loader returns or the live chart changes during a run | Keys are released; stale chart input is blocked while the engine pauses or rebuilds |
 | Beatmap fails to download | No chart detected; overlay reports it, no input is produced |
 | Keybind changed mid-run | Desync verifier stops the run rather than playing the wrong columns |
-| Tab backgrounded mid-hold | Keys released, engine paused, resumes on return |
+| Tab backgrounded mid-hold | Keys released and engine safely stopped; restart explicitly after returning |
 | Two columns bound to the same key | Duplicate presses are counted and surfaced in diagnostics instead of double-firing |
 | Humanization shifts a hold's tail past the next press | Clamped during `prepare()`: the release ceiling is the next same-column press, and letting go early is always allowed |
 | Humanization spreads a chord apart | Impossible by construction: one delta per timestamp, shared by every note in the chord |
-| A humanization setting changes mid-run | The timeline is rebuilt and reloaded from the current playhead, reproducibly from the same seed |
+| A timing or humanization setting changes mid-run | The scheduler updates from the current playhead. Holds with a future release remain held; any release moved behind the playhead is sent immediately |

@@ -21,6 +21,25 @@ const root = resolve(here, "..");
 const watch = process.argv.includes("--watch");
 
 const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
+// Embed the original cover artwork: the userscript remains a single file and
+// does not depend on another host (or the game's own artwork URLs).
+const cover = await readFile(resolve(root, "assets/trainer-cover.jpg"));
+const coverData = `data:image/jpeg;base64,${cover.toString("base64")}`;
+
+// Torus is commercially licensed, so it is not redistributed. Embed the OFL
+// Comfortaa fallback instead, with all upstream language subsets and weights.
+// Referencing Torus by family name at runtime still lets an installed or
+// page-provided copy take priority. The fallback stays offline and self-contained.
+const fontDir = resolve(root, "assets/fonts/comfortaa");
+let fontCss = await readFile(resolve(fontDir, "wght.css"), "utf8");
+fontCss = fontCss.replaceAll("'Comfortaa Variable'", "'Keyfall Rounded'");
+const fontPaths = [...fontCss.matchAll(/url\(\.\/files\/([^)]*)\)/g)].map((match) => match[1]);
+if (fontPaths.length === 0) throw new Error("No Comfortaa font subsets found in the upstream CSS");
+for (const name of fontPaths) {
+  const bytes = await readFile(resolve(fontDir, "files", name));
+  fontCss = fontCss.replace(`url(./files/${name})`, `url("data:font/woff2;base64,${bytes.toString("base64")}")`);
+}
+const fontLicense = await readFile(resolve(fontDir, "OFL.txt"), "utf8");
 
 const USERSCRIPT_HEADER = `// ==UserScript==
 // @name         Keyfall
@@ -28,23 +47,27 @@ const USERSCRIPT_HEADER = `// ==UserScript==
 // @version      ${pkg.version}
 // @updateURL    https://raw.githubusercontent.com/tussle1/Keyfall/main/release/keyfall.user.js
 // @downloadURL  https://raw.githubusercontent.com/tussle1/Keyfall/main/release/keyfall.user.js
-// @description  Keyfall — detects the live Web osu!mania chart and plays it through the site's own keyboard input path. Optional reproducible timing humanization. Local, single-player automation only.
+// @description  Keyfall — its own keyboard-event autoplay for Web osu!mania and Ashtonk!mania. Never uses either site's built-in Autoplay/Auto mod. Optional reproducible timing humanization.
 // @author       tussle1
 // @match        https://webosumania.com/*
 // @match        https://www.webosumania.com/*
 // @match        https://*.webosumania.com/*
 // @match        https://web-osu-mania.pages.dev/*
 // @match        https://web-osu-mania.vercel.app/*
+// @match        https://v2-ashtonkmania.lokaux.workers.dev/*
+// @match        https://ashtonkmania.lokaux.workers.dev/*
 // @match        http://localhost:*/*
 // @match        http://127.0.0.1:*/*
 // @run-at       document-start
 // @grant        none
 // @noframes
-// @license      MIT
+// @license      MIT AND OFL-1.1
 // ==/UserScript==
 `;
 
-const BANNER = `/*! Keyfall v${pkg.version} — browser-side autoplay automation for Web osu!mania (webosumania.com). */`;
+// The userscript and plain script are each standalone redistributions of the
+// OFL font, so include the complete copyright notice and license in both.
+const BANNER = `/*! Keyfall v${pkg.version} — its own keyboard-event autoplay for Web osu!mania and Ashtonk!mania. Never uses either site's built-in Autoplay/Auto mod. */\n/* Bundled fallback font: Comfortaa (SIL Open Font License 1.1)\n${fontLicense.replaceAll("*/", "* /")}\n*/`;
 
 /** Shared esbuild options. */
 const baseOptions = {
@@ -56,6 +79,10 @@ const baseOptions = {
   legalComments: "none",
   logLevel: "info",
   tsconfig: resolve(root, "tsconfig.json"),
+  define: {
+    __KEYFALL_COVER__: JSON.stringify(coverData),
+    __KEYFALL_FONT_CSS__: JSON.stringify(fontCss),
+  },
 };
 
 await mkdir(resolve(root, "dist"), { recursive: true });

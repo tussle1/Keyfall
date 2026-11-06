@@ -6,6 +6,7 @@ import {
   OFFSET_MAX,
   OFFSET_MIN,
   STORAGE_KEY,
+  UI_TOGGLE_CODE,
 } from "../constants";
 import type { HotkeyAction, Settings } from "../types";
 import { clamp, deepMerge } from "../util/helpers";
@@ -27,9 +28,8 @@ export interface SettingsEvents {
 /**
  * Hotkey migration, per action. Each action carries a short history of shipped
  * defaults (the original F-keys, plus the interim letter set for the UI
- * toggle). A stored code matching an older shipped default for that action was
- * never customised, so it follows the current default forward; any other
- * stored code is a deliberate choice and is left exactly as saved.
+ * toggle). Other action hotkeys preserve deliberate customizations. The UI
+ * toggle is always Right Shift, including for stores with an old custom key.
  */
 const LEGACY_HOTKEYS: Record<HotkeyAction, readonly string[]> = {
   toggleUI: ["F6", "KeyH"],
@@ -54,6 +54,26 @@ function migrateLegacyHotkeys(parsed: unknown): void {
       hotkeys[action] = DEFAULT_SETTINGS.input.hotkeys[action];
     }
   }
+}
+
+/** Upgrade the old compact defaults without overwriting custom dimensions. */
+function migrateLegacyAppearance(parsed: unknown): void {
+  if (!parsed || typeof parsed !== "object") return;
+  const storedRoot = parsed as Record<string, unknown>;
+  const migrated = storedRoot.__uiStyleVersion === 2;
+  delete storedRoot.__uiStyleVersion;
+  if (migrated) return;
+  const appearance = storedRoot.appearance;
+  if (!appearance || typeof appearance !== "object") return;
+  const stored = appearance as Record<string, unknown>;
+  const size = stored.size;
+  if (size && typeof size === "object") {
+    const dimensions = size as Record<string, unknown>;
+    if (dimensions.w === 296 && (dimensions.h === 0 || dimensions.h === undefined)) {
+      dimensions.w = DEFAULT_SETTINGS.appearance.size.w;
+    }
+  }
+  if (stored.opacity === 0.92) stored.opacity = DEFAULT_SETTINGS.appearance.opacity;
 }
 
 export class SettingsManager {
@@ -91,6 +111,7 @@ export class SettingsManager {
     try {
       const parsed = JSON.parse(raw);
       migrateLegacyHotkeys(parsed);
+      migrateLegacyAppearance(parsed);
       return this.sanitize(deepMerge(base, parsed));
     } catch (err) {
       console.warn("[Autoplay] stored settings were unreadable, using defaults", err);
@@ -108,13 +129,13 @@ export class SettingsManager {
     out.timing.spinThreshold = clamp(num(out.timing.spinThreshold, 6), 0, 25);
 
     out.appearance.uiScale = clamp(num(out.appearance.uiScale, 1), 0.6, 2);
-    out.appearance.opacity = clamp(num(out.appearance.opacity, 0.92), 0.15, 1);
+    out.appearance.opacity = clamp(num(out.appearance.opacity, 1), 0.15, 1);
     out.appearance.position = {
       x: num(out.appearance.position?.x, 16),
       y: num(out.appearance.position?.y, 16),
     };
     out.appearance.size = {
-      w: clamp(num(out.appearance.size?.w, 296), 220, 640),
+      w: clamp(num(out.appearance.size?.w, 427), 220, 640),
       h: Math.max(0, num(out.appearance.size?.h, 0)),
     };
     if (typeof out.appearance.accent !== "string" || !/^#[0-9a-f]{3,8}$/i.test(out.appearance.accent)) {
@@ -123,7 +144,10 @@ export class SettingsManager {
     out.appearance.collapsed = !!out.appearance.collapsed;
 
     out.general.enabled = out.general.enabled !== false;
-    out.general.showOverlay = out.general.showOverlay !== false;
+    out.general.autoStart = out.general.autoStart === true;
+    // Kept only for backward-compatible storage. Visibility is transient and
+    // no persisted flag can open the panel without Right Shift.
+    out.general.showOverlay = !!out.general.showOverlay;
     out.general.showKeyboard = out.general.showKeyboard !== false;
     out.general.debug = !!out.general.debug;
 
@@ -146,9 +170,15 @@ export class SettingsManager {
 
     const hotkeys = { ...DEFAULT_SETTINGS.input.hotkeys };
     for (const action of Object.keys(hotkeys) as HotkeyAction[]) {
+      if (action === "toggleUI") continue;
       const value = out.input.hotkeys?.[action];
-      if (typeof value === "string" && value.length > 0) hotkeys[action] = value;
+      // Reserve Right Shift so another action cannot steal the only way to
+      // reopen the interface. Other custom action keys remain intact.
+      if (typeof value === "string" && value.length > 0 && value !== UI_TOGGLE_CODE) {
+        hotkeys[action] = value;
+      }
     }
+    hotkeys.toggleUI = UI_TOGGLE_CODE;
     out.input.hotkeys = hotkeys;
 
     return out;
@@ -197,7 +227,9 @@ export class SettingsManager {
     setTimeout(() => {
       this.writeScheduled = false;
       try {
-        storage.setItem(STORAGE_KEY, JSON.stringify(this.current));
+        // Mark the visual migration in storage, not in the public Settings
+        // object, so a user can deliberately choose the old width/opacity later.
+        storage.setItem(STORAGE_KEY, JSON.stringify({ ...this.current, __uiStyleVersion: 2 }));
       } catch {
         // Quota or blocked storage — settings stay in memory for this session.
       }

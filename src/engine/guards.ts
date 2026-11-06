@@ -26,6 +26,8 @@ export interface GuardHooks {
   heldColumns: () => number[];
   /** When each held column was pressed, in chart time. */
   heldSince: () => Map<number, number>;
+  /** A still-queued release for this held column, if one exists. */
+  pendingReleaseAt?: (column: number) => number | null;
   log?: (message: string) => void;
 }
 
@@ -47,6 +49,8 @@ export class Guards {
   /** Consecutive failed liveness probes before we escalate. */
   private deadProbeCount = 0;
   private static readonly DEAD_PROBE_LIMIT = 3;
+  /** Overdue releases get one watchdog interval to run after a long stall. */
+  private overdueRelease = new Map<number, number>();
 
   constructor(hooks: GuardHooks, options: GuardOptions = {}) {
     this.hooks = hooks;
@@ -148,24 +152,40 @@ export class Guards {
     }
     this.deadProbeCount = 0;
 
-    // 2. Stuck keys: held far longer than any real hold note, with the chart
-    //    clock still advancing (so it is not merely a pause).
+    // 2. Stuck keys: long holds are valid when their scheduled release is
+    //    still ahead. If a very long main-thread stall makes the watchdog wake
+    //    before an overdue scheduler/tap timer, give it one cycle to catch up.
     const chartTime = this.hooks.chartTime();
     if (chartTime === null) return;
 
     const heldSince = this.hooks.heldSince();
-    if (heldSince.size === 0) return;
-
+    for (const column of this.overdueRelease.keys()) {
+      if (!heldSince.has(column)) this.overdueRelease.delete(column);
+    }
     for (const [column, since] of heldSince) {
       const heldFor = chartTime - since;
-      if (heldFor > this.opts.stuckKeyTimeout) {
-        this.hooks.log?.(
-          `column ${column} held ${heldFor.toFixed(0)}ms with no release — forcing`,
-        );
-        this.hooks.releaseAll();
-        this.hooks.onPanic(`Stuck key detected on column ${column + 1}`);
-        return;
+      if (heldFor <= this.opts.stuckKeyTimeout) {
+        this.overdueRelease.delete(column);
+        continue;
       }
+      const pending = this.hooks.pendingReleaseAt?.(column);
+      if (typeof pending === "number" && Number.isFinite(pending)) {
+        if (chartTime <= pending + this.opts.watchdogInterval * 2) {
+          this.overdueRelease.delete(column);
+          continue;
+        }
+        if (this.overdueRelease.get(column) !== since) {
+          this.overdueRelease.set(column, since);
+          this.hooks.log?.(`column ${column} has an overdue scheduled release — waiting for recovery`);
+          continue;
+        }
+      }
+      this.hooks.log?.(
+        `column ${column} held ${heldFor.toFixed(0)}ms with no release — forcing`,
+      );
+      this.hooks.releaseAll();
+      this.hooks.onPanic(`Stuck key detected on column ${column + 1}`);
+      return;
     }
   }
 
@@ -195,6 +215,7 @@ export class Guards {
     for (const dispose of this.disposers.splice(0)) {
       dispose();
     }
+    this.overdueRelease.clear();
     this.installed = false;
   }
 }

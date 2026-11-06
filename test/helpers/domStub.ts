@@ -42,8 +42,11 @@ export class StubEventTarget {
       if (!handlers) continue;
       for (const handler of Array.from(handlers)) {
         handler(event);
-        if (event.__propagationStopped) return !event.defaultPrevented;
+        // stopPropagation does not stop other listeners on the same target;
+        // only stopImmediatePropagation does, just as in the real DOM.
+        if (event.__immediatePropagationStopped) return !event.defaultPrevented;
       }
+      if (event.__propagationStopped) return !event.defaultPrevented;
     }
     return !event.defaultPrevented;
   }
@@ -61,6 +64,8 @@ export class StubKeyboardEvent {
   readonly bubbles: boolean;
   readonly cancelable: boolean;
   readonly composed: boolean;
+  /** Real browsers stamp synthetic KeyboardEvents at dispatch time. */
+  readonly timeStamp: number;
   readonly location: number;
   readonly altKey: boolean;
   readonly ctrlKey: boolean;
@@ -70,6 +75,7 @@ export class StubKeyboardEvent {
   readonly isTrusted = false;
   defaultPrevented = false;
   __propagationStopped = false;
+  __immediatePropagationStopped = false;
 
   constructor(type: string, init: Record<string, unknown> = {}) {
     this.type = type;
@@ -79,6 +85,8 @@ export class StubKeyboardEvent {
     this.bubbles = init.bubbles !== false;
     this.cancelable = Boolean(init.cancelable);
     this.composed = Boolean(init.composed);
+    const timestamp = Number(init.timeStamp);
+    this.timeStamp = Number.isFinite(timestamp) ? timestamp : performance.now();
     this.location = Number(init.location ?? 0);
     this.altKey = Boolean(init.altKey);
     this.ctrlKey = Boolean(init.ctrlKey);
@@ -92,6 +100,11 @@ export class StubKeyboardEvent {
 
   stopPropagation(): void {
     this.__propagationStopped = true;
+  }
+
+  stopImmediatePropagation(): void {
+    this.__propagationStopped = true;
+    this.__immediatePropagationStopped = true;
   }
 }
 
@@ -360,6 +373,8 @@ export interface StubEnvironment {
   advance: (ms: number) => void;
   /** Run one animation frame callback. */
   frame: (ms?: number) => void;
+  /** Advance host time without delivering callbacks (a blocked main thread). */
+  stall: (ms: number) => void;
   now: () => number;
   globalsInstalled: () => void;
   globalsRemoved: () => void;
@@ -502,6 +517,7 @@ export function installDom(options: { start?: number } = {}): StubEnvironment {
     document,
     advance,
     frame,
+    stall: (ms) => { clock += ms; },
     now: () => clock,
     globalsInstalled() {
       for (const [name, value] of globals) {

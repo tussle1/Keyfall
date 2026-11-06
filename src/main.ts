@@ -60,10 +60,7 @@ function boot(win: Window): Bootstrapped | null {
         onStop: () => engine.stop(),
         onEmergency: () => engine.emergencyStop("EMERGENCY STOP (button)"),
         onSettingChange: (next) => engine.applySettings(next),
-        onRebindMapping: () => {
-          // Force a fresh detection pass so the mapping is re-read.
-          engine.init();
-        },
+        onRebindMapping: () => engine.refreshMapping(),
         getDiagnostics: () => engine.getDiagnostics(),
         getHumanizationStats: () => engine.humanizationStats,
       },
@@ -80,12 +77,14 @@ function boot(win: Window): Bootstrapped | null {
 
   /* ------------------------------ hotkeys ------------------------------ */
 
+  let reportedCollision = "";
   const hotkeys = new HotkeyManager({
     onAction: (action: HotkeyAction) => {
       switch (action) {
         case "toggleUI": {
-          const next = !settings.all.general.showOverlay;
-          settings.set("general.showOverlay", next);
+          // Visibility is transient: the panel always starts hidden, and only
+          // a trusted Right Shift press reaches this action.
+          if (overlay) overlay.setVisible(!overlay.isVisible);
           break;
         }
         case "start":
@@ -103,18 +102,38 @@ function boot(win: Window): Bootstrapped | null {
           break;
       }
     },
-    getSiteCodes: () => engine.currentMapping?.codes ?? [],
+    getSiteCodes: () => {
+      // Check both the effective mapping and the site's primary/secondary
+      // bindings: a custom override does not stop a physical hotkey from
+      // colliding with a different key the game still listens to.
+      const effective = engine.currentMapping?.codes ?? [];
+      try {
+        const game = engine.currentGame;
+        const keyCount = engine.currentChart?.keyCount ?? 0;
+        const live = game?.columnKeybinds;
+        const stored = game?.settings?.keybinds?.keyModes?.[keyCount - 1];
+        const pairs = Array.isArray(live) && live.length === keyCount ? live : Array.isArray(stored) ? stored : [];
+        const siteCodes = pairs.flat().filter((code): code is string => typeof code === "string" && code.length > 0);
+        return [...effective, ...siteCodes];
+      } catch {
+        // The page may be tearing down its game while settings are changing.
+        return effective;
+      }
+    },
     isCapturing: () => overlay?.isCapturing ?? false,
     onCollision: (collisions) => {
       const list = collisions.map((c) => `${c.action}=${humanizeCode(c.code)}`).join(", ");
-      console.warn(
-        `[${NAME}] hotkey collision with the site's keybinds: ${list}. ` +
-          `Rebind them in the overlay's Input settings.`,
-      );
-      overlay?.setNotice(
-        "warn",
-        `Hotkey collision with site keybinds: ${list}. Rebind in Settings → Input.`,
-      );
+      if (!list) {
+        reportedCollision = "";
+        overlay?.clearNotice("hotkey-collision");
+        return;
+      }
+      const tip = collisions.some((collision) => collision.action === "toggleUI")
+        ? "Right Shift is fixed; change that binding in the game. Other action keys can be changed in More! → Input."
+        : "Change the action keys in More! → Input.";
+      if (list !== reportedCollision) console.warn(`[${NAME}] hotkey collision with the site's keybinds: ${list}. ${tip}`);
+      reportedCollision = list;
+      overlay?.setNotice("warn", `Hotkey collision with site keybinds: ${list}. ${tip}`, "hotkey-collision");
     },
   });
 
@@ -147,11 +166,13 @@ function boot(win: Window): Bootstrapped | null {
   );
 
   offs.push(
+    engine.on("pendingStart", ({ pending }) => overlay?.setPendingStart(pending !== null)),
+  );
+
+  offs.push(
     engine.on("site", (check) => {
       if (check.verdict === "unknown") {
-        // Spec: show the exact message when the page is not the target site.
-        if (!settings.all.general.showOverlay) return;
-        mountOverlay();
+        // Keep the notice ready in the hidden panel without opening it.
         overlay?.setPhase("IDLE");
         overlay?.setChart(null, null, null);
         overlay?.setNotice("error", NOT_DETECTED_MESSAGE);
@@ -166,12 +187,11 @@ function boot(win: Window): Bootstrapped | null {
 
   offs.push(
     engine.on("detected", ({ chart, keyMapping, analysis, via }) => {
-      if (settings.all.general.showOverlay) mountOverlay();
       overlay?.setChart(chart, analysis, keyMapping);
-      overlay?.setNotice(
-        "ok",
-        `${chart.keyCount}K · ${chart.noteCount} notes · ${analysis.taps} taps / ${analysis.holds} holds · peak ${analysis.peakNps} NPS`,
-      );
+      overlay?.clearNotice();
+      if (keyMapping.source === "fallback") {
+        overlay?.setNotice("warn", "Using fallback key mapping. Check Input settings against the game's keys.");
+      }
       if (settings.all.general.debug) {
         overlay?.logDebug("info", `chart detected via ${via}`);
         overlay?.logDebug("info", `keys ${chart.keyCount}, notes ${chart.noteCount}, actions ${analysis.chords} chord notes`);
@@ -186,6 +206,8 @@ function boot(win: Window): Bootstrapped | null {
 
   offs.push(
     engine.on("timeline", ({ analysis, humanization }) => {
+      overlay?.setAnalysis(analysis);
+      overlay?.refreshHumanization();
       // The chart did not change, but every action's timestamp may have. Refresh
       // the pattern readout and, when debug is on, say so explicitly — a silent
       // mid-run reshuffle would be confusing to diagnose otherwise.
@@ -254,7 +276,9 @@ function boot(win: Window): Bootstrapped | null {
 
   /* ------------------------------- boot -------------------------------- */
 
-  if (settings.all.general.showOverlay) mountOverlay();
+  // The panel is mounted hidden so it can keep receiving chart/status updates
+  // before the first Right Shift press, and never flashes on a fresh page.
+  mountOverlay();
   engine.init();
 
   const uninstall = (): void => {
@@ -309,8 +333,9 @@ function boot(win: Window): Bootstrapped | null {
     get snifferInstalled() {
       return isSnifferInstalled();
     },
-    showUI: () => settings.set("general.showOverlay", true),
-    hideUI: () => settings.set("general.showOverlay", false),
+    get uiVisible() {
+      return overlay?.isVisible ?? false;
+    },
     setDebug: (on: boolean) => settings.set("general.debug", !!on),
     setOffset: (ms: number) => settings.set("timing.offset", ms),
     resetSettings: () => settings.reset(),

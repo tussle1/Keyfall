@@ -1,21 +1,24 @@
 {
   "name": "keyfall",
-  "version": "1.1.1",
+  "version": "1.5.1",
   "private": true,
   "type": "module",
-  "description": "Keyfall \u2014 browser-side autoplay automation for Web osu!mania (webosumania.com). Detects the live chart and drives the site's own keyboard input path, with optional reproducible timing humanization.",
+  "description": "Keyfall \u2014 its own keyboard-event autoplay for Web osu!mania and Ashtonk!mania. Reuses one scheduler, timeline, humanizer and synthetic DOM input path; never uses either site's built-in Autoplay/Auto mod.",
   "license": "MIT",
   "scripts": {
     "build": "node scripts/build.mjs",
     "watch": "node scripts/build.mjs --watch",
     "test": "node --import=./test/helpers/register.mjs --test test/*.test.ts",
+    "test:motion": "node test/browser-motion.mjs",
     "smoke": "npm run build && node --import=./test/helpers/register.mjs scripts/smoke.mjs",
     "typecheck": "tsc --noEmit",
     "verify": "npm run typecheck && npm run test && npm run smoke",
-    "demo": "node scripts/demo-server.mjs"
+    "demo": "node scripts/demo-server.mjs",
+    "test:ashtonk": "npm run build && node test/browser-ashtonk.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
+    "playwright-core": "^1.64.1",
     "typescript": "^5.7.0"
   },
   "engines": {

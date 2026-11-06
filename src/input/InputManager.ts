@@ -1,4 +1,5 @@
 import type { InputAction, KeyMapping } from "../types";
+import { lowerBound } from "../util/helpers";
 
 /**
  * Browser keyboard input abstraction.
@@ -135,6 +136,16 @@ export class InputManager {
     return (this.columnCodes.get(column)?.size ?? 0) > 0;
   }
 
+  /** Scheduled tap keyup, if a browser stall has delayed its deferral timer. */
+  pendingTapReleaseAt(column: number): number | null {
+    for (const entry of this.held.values()) {
+      if (entry.column === column && entry.releaseHandle !== null) {
+        return entry.releaseAtChart + this.minTapHoldMs;
+      }
+    }
+    return null;
+  }
+
   /**
    * Chart time at which each currently-held key was pressed.
    *
@@ -212,6 +223,52 @@ export class InputManager {
 
     // chartTime is informational here; per-action times drive the logic.
     void chartTime;
+  }
+
+  /**
+   * Reconcile actions skipped after a large stall. A held key whose scheduled
+   * release was skipped must be released now; an unrelated hold whose tail is
+   * still in the future must remain down. Skipped presses are never replayed.
+   */
+  releaseSkipped(actions: readonly InputAction[], chartTime: number): number {
+    let released = 0;
+    for (const action of actions) {
+      if (this.held.size === 0) break;
+      if (action.type !== "up") continue;
+      const entry = this.held.get(action.code);
+      if (!entry || entry.column !== action.column) continue;
+      this.keyUp(entry.code, entry.column, chartTime);
+      if (!this.held.has(entry.code)) released++;
+    }
+    return released;
+  }
+
+  /**
+   * After a live timeline/offset change, keep holds that still have an upcoming
+   * release, but immediately release keys whose next action is another press
+   * (or no action at all). Otherwise a moved or removed release can be skipped
+   * by the scheduler's new cursor and leave a key stuck. Deferred tap releases
+   * own their own timer and must not be cut short here.
+   */
+  reconcileHeld(actions: InputAction[], chartTime: number, offset: number): number {
+    const unresolved = new Map<string, HeldEntry>();
+    for (const entry of this.held.values()) {
+      if (entry.releaseHandle === null) unresolved.set(entry.code, entry);
+    }
+    if (unresolved.size === 0) return 0;
+
+    const releaseNow: HeldEntry[] = [];
+    const start = lowerBound(actions, chartTime, (action) => action.time + offset);
+    for (let i = start; i < actions.length && unresolved.size > 0; i++) {
+      const action = actions[i];
+      const entry = unresolved.get(action.code);
+      if (!entry) continue;
+      unresolved.delete(action.code);
+      if (action.type !== "up" || action.column !== entry.column) releaseNow.push(entry);
+    }
+    releaseNow.push(...unresolved.values());
+    for (const entry of releaseNow) this.keyUp(entry.code, entry.column, chartTime);
+    return releaseNow.length;
   }
 
   /* ------------------------- event plumbing ------------------------- */

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import {
   DEFAULT_SETTINGS,
-  EXTENDED_SUFFIX_CODES,
   FALLBACK_KEYBINDS,
   OFFSET_MAX,
   OFFSET_MIN,
@@ -368,20 +367,25 @@ describe("helpers", () => {
 });
 
 describe("default hotkeys", () => {
-  it("avoid every fallback and extended column layout", () => {
-    const columnCodes = new Set<string>();
-    for (const layouts of FALLBACK_KEYBINDS) {
-      for (const layout of layouts) {
-        for (const code of layout) if (code) columnCodes.add(code);
-      }
+  it("avoids common 1K–10K defaults and reports high-key collisions", () => {
+    for (const layout of FALLBACK_KEYBINDS.slice(0, 10)) {
+      const codes = layout.flat().filter((code): code is string => !!code);
+      assert.deepEqual(findHotkeyCollisions(DEFAULT_SETTINGS, codes), []);
     }
-    for (const code of EXTENDED_SUFFIX_CODES) columnCodes.add(code);
-    for (const [action, code] of Object.entries(DEFAULT_SETTINGS.input.hotkeys)) {
-      assert.ok(
-        !columnCodes.has(code),
-        `${action} default ${code} collides with a column layout`,
-      );
-    }
+    const highKeys = FALLBACK_KEYBINDS[17].flat().filter((code): code is string => !!code);
+    assert.deepEqual(
+      findHotkeyCollisions(DEFAULT_SETTINGS, highKeys).map(({ code }) => code).sort(),
+      ["KeyG", "KeyX", "KeyZ"],
+    );
+  });
+
+  it("has a distinct default code for every lane from 1K to 18K", () => {
+    assert.equal(FALLBACK_KEYBINDS.length, 18);
+    FALLBACK_KEYBINDS.forEach((layout, index) => {
+      const codes = layout.map((pair) => pair[0]);
+      assert.equal(codes.length, index + 1);
+      assert.equal(new Set(codes).size, codes.length);
+    });
   });
 
   it("are letter keys, except the UI toggle on Right Shift", () => {
@@ -431,10 +435,34 @@ describe("legacy hotkey migration", () => {
     settings.dispose();
   });
 
-  it("keeps a customised toggle as stored", () => {
+  it("migrates a customised UI toggle to the fixed Right Shift shortcut", () => {
     store({ toggleUI: "KeyM", start: "KeyG", pause: "KeyB", stop: "KeyX", emergency: "KeyZ" });
     const settings = new SettingsManager(undefined, env.window);
-    assert.equal(settings.all.input.hotkeys.toggleUI, "KeyM");
+    assert.equal(settings.all.input.hotkeys.toggleUI, "ShiftRight");
+    assert.equal(settings.all.input.hotkeys.start, "KeyG");
     settings.dispose();
+  });
+
+  it("reserves Right Shift even when another action tries to claim it", () => {
+    const settings = new SettingsManager(undefined, env.window);
+    settings.set("input.hotkeys.start", "ShiftRight");
+    settings.set("input.hotkeys.toggleUI", "KeyM");
+    assert.equal(settings.all.input.hotkeys.toggleUI, "ShiftRight");
+    assert.equal(settings.all.input.hotkeys.start, DEFAULT_SETTINGS.input.hotkeys.start);
+    settings.dispose();
+  });
+
+  it("migrates old visual defaults once, while preserving later deliberate choices", () => {
+    env.window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ appearance: { size: { w: 296, h: 0 }, opacity: 0.92 } }));
+    const settings = new SettingsManager(undefined, env.window);
+    assert.equal(settings.all.appearance.size.w, 427);
+    assert.equal(settings.all.appearance.opacity, 1);
+    settings.set("appearance.size", { w: 296, h: 0 });
+    settings.set("appearance.opacity", 0.92);
+    env.advance(300);
+    const reloaded = new SettingsManager(undefined, env.window);
+    assert.equal(reloaded.all.appearance.size.w, 296);
+    assert.equal(reloaded.all.appearance.opacity, 0.92);
+    settings.dispose(); reloaded.dispose();
   });
 });

@@ -1,9 +1,13 @@
 # The Web osu!mania contract
 
-Everything Keyfall does depends on a small set of facts about how
+Everything Keyfall's original path depends on is a small set of facts about how
 [Web osu!mania](https://webosumania.com/) is built. They are written down here
 so that when the site changes, the fix is a targeted edit rather than an
 archaeological dig.
+
+Ashtonk!mania is a separate codebase with its own adapter. See
+[`ASHTONK-CONTRACT.md`](./ASHTONK-CONTRACT.md) for its session, chart, clock,
+input and fair-play contract.
 
 Verified against the public source at
 [`HecticKiwi/Web-Osu-Mania`](https://github.com/HecticKiwi/Web-Osu-Mania)
@@ -42,8 +46,9 @@ Consequences for Keyfall:
   the honest limit of browser-side automation: a determined anti-cheat could
   detect this trivially. See `docs/SAFETY.md`.
 - Because the site listens on `document` in the bubble phase, our hotkeys are
-  handled in the **capture** phase with `stopPropagation()` so a hotkey never
-  also registers as a column hit.
+  handled on `window` capture with `stopImmediatePropagation()` before the site
+  sees them. The same location also makes emergency stop reachable through
+  Ashtonk!mania's window-capture handler; avoid colliding hotkeys regardless.
 
 ## 2. Column resolution uses `event.code`
 
@@ -267,7 +272,7 @@ reached; requests are never modified, blocked or replayed.
 | Stops setting `window.__PIXI_APP__` | Strategy 1 fails | Strategies 2/3 (canvas scan, fiber probe) still work |
 | Renames `Game` fields | `looksLikeGame` may reject | Widen the shape check in `src/detect/fiber.ts` |
 | Adds an `isTrusted` check | **Input stops working entirely** | No legitimate fix. This is the hard ceiling. |
-| Moves keybinds out of `settings.keybinds.keyModes` | Auto-mapping fails | Configure the mapping manually in Settings → Input |
+| Moves keybinds out of `settings.keybinds.keyModes` | Auto-mapping fails | Configure the mapping manually in More! → Input |
 | Changes `.osz` provider or transport | Fallback parser loses its source | Primary path unaffected (it reads the live game) |
 | Switches renderer away from Pixi | `__PIXI_APP__` disappears | Strategies 2/3 |
 | Changes hold representation | Timeline may double-fire | Update pass 1 of `src/chart/timeline.ts`, and `countUniqueNotes` |

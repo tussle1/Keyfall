@@ -2,7 +2,10 @@ import { DEFAULT_HUMANIZATION } from "./humanize/humanizer";
 import type { Settings } from "./types";
 
 export const NAME = "Keyfall";
-export const VERSION = "1.1.1";
+export const VERSION = "1.5.1";
+
+/** The panel is deliberately available only from the physical Right Shift key. */
+export const UI_TOGGLE_CODE = "ShiftRight";
 
 /** localStorage key for persisted settings. Versioned so we can migrate. */
 export const STORAGE_KEY = "keyfall:settings:v1";
@@ -24,6 +27,21 @@ export const KNOWN_HOSTS = [
 
 /** Localhost dev servers for the site's own repo (`npm run dev`). */
 export const DEV_HOST_PATTERN = /^(localhost|127\.0\.0\.1|\[::1\])$/;
+
+/**
+ * Ashtonk!mania deployments. The live v2 build the adapter targets is
+ * `v2-ashtonkmania.lokaux.workers.dev`; the pattern also recognises future
+ * `vN-` deployments and subdomains of the main deployment.
+ */
+export const ASHTONK_HOSTS = [
+  "v2-ashtonkmania.lokaux.workers.dev",
+  "ashtonkmania.lokaux.workers.dev",
+];
+export const ASHTONK_HOST_PATTERN =
+  /^(?:v\d+-)?ashtonkmania\.lokaux\.workers\.dev$/i;
+
+/** Public global exported by Ashtonk!mania's app bootstrap. */
+export const ASHTONK_APP_GLOBAL = "AshtonkMania";
 
 /** The global the site sets for the Pixi devtools extension while playing. */
 export const PIXI_APP_GLOBAL = "__PIXI_APP__";
@@ -79,26 +97,26 @@ export const FALLBACK_KEYBINDS: (string | null)[][][] = [
     ["KeyL"],
     ["Semicolon"],
   ], // 10K
-];
-
-/** Extend 11K..18K programmatically rather than typing them all out. */
-export const EXTENDED_SUFFIX_CODES = [
-  "KeyQ",
-  "KeyW",
-  "KeyE",
-  "KeyR",
-  "KeyT",
-  "KeyY",
-  "KeyU",
-  "KeyI",
-  "KeyO",
-  "KeyP",
+  // Web-Osu-Mania / Ashtonk!mania 11K–18K defaults (MIT © 2024 Danny Duong).
+  ...[
+    ["KeyA", "KeyS", "KeyD", "KeyF", "KeyV", "Space", "KeyN", "KeyJ", "KeyK", "KeyL", "Semicolon"],
+    ["KeyA", "KeyS", "KeyD", "KeyF", "KeyC", "KeyV", "KeyN", "KeyM", "KeyJ", "KeyK", "KeyL", "Semicolon"],
+    ["KeyA", "KeyS", "KeyD", "KeyF", "KeyC", "KeyV", "Space", "KeyN", "KeyM", "KeyJ", "KeyK", "KeyL", "Semicolon"],
+    ["KeyA", "KeyS", "KeyD", "KeyF", "KeyX", "KeyC", "KeyV", "KeyN", "KeyM", "Comma", "KeyJ", "KeyK", "KeyL", "Semicolon"],
+    ["KeyA", "KeyS", "KeyD", "KeyF", "KeyX", "KeyC", "KeyV", "Space", "KeyN", "KeyM", "Comma", "KeyJ", "KeyK", "KeyL", "Semicolon"],
+    ["KeyA", "KeyS", "KeyD", "KeyF", "KeyZ", "KeyX", "KeyC", "KeyV", "KeyN", "KeyM", "Comma", "Period", "KeyJ", "KeyK", "KeyL", "Semicolon"],
+    ["KeyA", "KeyS", "KeyD", "KeyF", "KeyZ", "KeyX", "KeyC", "KeyV", "Space", "KeyN", "KeyM", "Comma", "Period", "KeyJ", "KeyK", "KeyL", "Semicolon"],
+    ["KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyZ", "KeyX", "KeyC", "KeyV", "KeyN", "KeyM", "Comma", "Period", "KeyH", "KeyJ", "KeyK", "KeyL", "Semicolon"],
+  ].map((layout) => layout.map((code) => [code])),
 ];
 
 export const DEFAULT_SETTINGS: Settings = {
   general: {
     enabled: true,
-    showOverlay: true,
+    // Opt-in: an update must not start playing songs without user action.
+    autoStart: false,
+    // Legacy persisted flag; panel visibility is now transient and keyboard-only.
+    showOverlay: false,
     showKeyboard: true,
     debug: false,
   },
@@ -112,15 +130,10 @@ export const DEFAULT_SETTINGS: Settings = {
     keyMappings: {},
     useSecondaryKeybind: false,
     hotkeys: {
-      // Right Shift toggles the panel: it is a modifier the site never uses as
-      // a column key, it is reachable without looking, and it cannot be hit by
-      // accident while typing or playing. The action keys are letters chosen
-      // from the set that appears in NO column layout: FALLBACK_KEYBINDS
-      // covers A S D F V N J K L (plus Space and Semicolon) and
-      // EXTENDED_SUFFIX_CODES covers Q W E R T Y U I O P, so a default hotkey
-      // can never double as a column key at any key count.
-      // Mnemonics: G = go, B = break, X = stop, Z = last resort.
-      toggleUI: "ShiftRight",
+      // Right Shift toggles the panel; G/B/X/Z are the existing action keys.
+      // High-key layouts may use some of these, so live collision detection
+      // warns the user to rebind action keys when necessary.
+      toggleUI: UI_TOGGLE_CODE,
       start: "KeyG",
       pause: "KeyB",
       stop: "KeyX",
@@ -129,11 +142,11 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   appearance: {
     uiScale: 1,
-    opacity: 0.92,
+    opacity: 1,
     accent: "#ff6b9d",
     position: { x: 16, y: 16 },
     collapsed: false,
-    size: { w: 296, h: 0 },
+    size: { w: 427, h: 0 },
   },
   humanization: { ...DEFAULT_HUMANIZATION },
 };

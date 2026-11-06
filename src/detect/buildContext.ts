@@ -1,5 +1,4 @@
 import {
-  EXTENDED_SUFFIX_CODES,
   FALLBACK_KEYBINDS,
   MAX_KEY_COUNT,
   MIN_KEY_COUNT,
@@ -42,11 +41,11 @@ export function readKeyCount(game: GameLike): number | null {
  * Build a `keyCount -> code[]` mapping.
  *
  * Priority:
- *  1. The live game's resolved `columnKeybinds` (exact — includes the user's
- *     own rebinds and the deep-cloned settings for that specific run).
- *  2. The game's cloned settings `keybinds.keyModes[keyCount - 1]`.
- *  3. A user override from settings.
- *  4. The built-in fallback layout.
+ *  1. An explicit user override from Keyfall's settings.
+ *  2. The live game's resolved `columnKeybinds`.
+ *  3. The game's cloned settings `keybinds.keyModes[keyCount - 1]`.
+ *  4. The built-in fallback layout. An override must correspond to bindings
+ *     accepted by the site; use "Re-read from site" to remove it.
  */
 export function buildKeyMapping(
   game: GameLike | null,
@@ -57,7 +56,14 @@ export function buildKeyMapping(
     return { codes: [], keyCount, source: "fallback" };
   }
 
-  // 1. Live resolved keybinds on the game instance.
+  // A deliberate override must take precedence or the mapping editor would
+  // display a change while the engine silently continued using the old keys.
+  const override = settings?.input?.keyMappings?.[String(keyCount)];
+  if (Array.isArray(override) && override.length === keyCount) {
+    return { codes: [...override], keyCount, source: "user" };
+  }
+
+  // 2. Live resolved keybinds on the game instance.
   const live = game?.columnKeybinds;
   if (Array.isArray(live) && live.length === keyCount) {
     const codes = live.map((pair) => pair?.[0] ?? null);
@@ -66,7 +72,7 @@ export function buildKeyMapping(
     }
   }
 
-  // 2. Cloned settings on the game instance.
+  // 3. Cloned settings on the game instance.
   const keyModes = game?.settings?.keybinds?.keyModes;
   if (Array.isArray(keyModes)) {
     const mode = keyModes[keyCount - 1];
@@ -76,12 +82,6 @@ export function buildKeyMapping(
         return { codes: codes as string[], keyCount, source: "site" };
       }
     }
-  }
-
-  // 3. User override.
-  const override = settings.input.keyMappings[String(keyCount)];
-  if (Array.isArray(override) && override.length === keyCount) {
-    return { codes: [...override], keyCount, source: "user" };
   }
 
   // 4. Fallback layout.
@@ -104,26 +104,9 @@ export function buildSecondaryMapping(
   return source.map((pair) => pair?.[1] ?? null);
 }
 
-/** Built-in default layout, extended past 10K with spare key codes. */
+/** Built-in 1K–18K default layouts, used only when live keybinds are unavailable. */
 export function fallbackCodes(keyCount: number): string[] {
-  const known = FALLBACK_KEYBINDS[keyCount - 1];
-  if (known) return known.map((pair) => pair[0] ?? "Space");
-
-  // 11K..18K: start from the 10K layout and append unused codes.
-  const base = (FALLBACK_KEYBINDS[FALLBACK_KEYBINDS.length - 1] ?? []).map(
-    (pair) => pair[0] ?? "Space",
-  );
-  const used = new Set(base);
-  const out = [...base];
-  for (const code of EXTENDED_SUFFIX_CODES) {
-    if (out.length >= keyCount) break;
-    if (!used.has(code)) {
-      out.push(code);
-      used.add(code);
-    }
-  }
-  while (out.length < keyCount) out.push("Space");
-  return out.slice(0, keyCount);
+  return (FALLBACK_KEYBINDS[keyCount - 1] ?? []).map((pair) => pair[0] ?? "Space");
 }
 
 /** Extract a normalised chart from a live game. */
@@ -180,21 +163,27 @@ export function buildChartFromGame(
   // key count is wrong. Trust the chart.
   const effectiveKeyCount = Math.max(keyCount, maxColumn + 1);
 
-  const startTime = Number.isFinite(game.startTime) && game.startTime > 0
-    ? game.startTime
-    : minTime;
-  const endTime = Number.isFinite(game.endTime) && game.endTime > startTime
-    ? game.endTime
-    : maxEnd;
+  // Adapter getters may scan/convert the site's chart, so read each only once.
+  const liveStart = game.startTime;
+  const liveEnd = game.endTime;
+  const startTime = Number.isFinite(liveStart) && liveStart > 0 ? liveStart : minTime;
+  const endTime = Number.isFinite(liveEnd) && liveEnd > startTime ? liveEnd : maxEnd;
 
   const noteCount = countUniqueNotes(notes);
 
   // The signature identifies "is this the same chart?" and must depend only on
   // structural facts. It used to fold in the label, which meant any change to
   // how a chart is *described* looked like the user switching beatmaps.
-  const signature = hashString(
-    `${effectiveKeyCount}|${notes.length}|${noteCount}|${Math.round(startTime)}|${Math.round(endTime)}`,
-  );
+  // Site adapters may know about structural details that the generic signature
+  // cannot see (e.g. Ashtonk's `random` column permutation, practice loops and
+  // replaced `s.engine` objects). Prefer that identity when supplied.
+  const liveSignature = game.chartSignature;
+  const signature =
+    typeof liveSignature === "string" && liveSignature.length > 0
+      ? liveSignature
+      : hashString(
+          `${effectiveKeyCount}|${notes.length}|${noteCount}|${Math.round(startTime)}|${Math.round(endTime)}`,
+        );
 
   return {
     keyCount: effectiveKeyCount,
@@ -222,7 +211,7 @@ export function buildChartFromGame(
  * Rather than guess, this describes what is actually known: the key count, how
  * many objects the chart holds, and the playfield's time span. When a title is
  * available — the fallback `.osz` path parses one out of the `[Metadata]`
- * section — the caller passes it in.
+ * section, or the Ashtonk!mania adapter exposes `s.rec` — it is used instead.
  */
 function describeGame(game: GameLike, keyCount: number, noteCount: number, startTime: number, endTime: number): string {
   const meta = (game as { metadata?: { title?: unknown; artist?: unknown; version?: unknown } }).metadata;
@@ -244,6 +233,12 @@ export function buildContextFromGame(
   settings: Settings,
   via: string,
 ): DetectionResult {
+  // A site adapter can report an input conflict the generic guards do not know
+  // about, such as a replay feed. Surface it before scheduling anything.
+  if (typeof game.unsupportedReason === "string" && game.unsupportedReason.length > 0) {
+    return { ok: false, via, game, reason: game.unsupportedReason };
+  }
+
   const keyCount = readKeyCount(game);
   if (!keyCount || keyCount < MIN_KEY_COUNT || keyCount > MAX_KEY_COUNT) {
     return {
@@ -292,7 +287,7 @@ export function buildContextFromGame(
   }
 
   // A replay in progress drives input itself; don't fight it.
-  if ((game as any).replayPlayer) {
+  if (game.replayPlayer) {
     return {
       ok: false,
       via,

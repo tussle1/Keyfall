@@ -21,11 +21,12 @@
         │ siteDetection  │  │ clock          │  │ InputManager   │
         │ pixiHook       │  │ scheduler      │  └───────┬────────┘
         │ fiber          │  └───────▲────────┘          │
-        │ buildContext   │          │                   │
-        │ chartSource    │  ┌───────┴────────┐          │
-        │ osuFileParser  │  │  chart/        │          │
-        └────────┬───────┘  │  timeline      │          │
-                 │          └────────────────┘          │
+        │ ashtonkAdapter │          │                   │
+        │ buildContext   │  ┌───────┴────────┐          │
+        │ chartSource    │  │  chart/        │          │
+        │ osuFileParser  │  │  timeline      │          │
+        └────────┬───────┘  └────────────────┘          │
+                 │                                      │
                  └──────────────────────────────────────┘
                                 │
                     ┌───────────▼────────────┐
@@ -34,15 +35,15 @@
                     └───────────┬────────────┘
                                 │
                     ┌───────────▼────────────┐
-                    │   Web osu!mania's own   │
-                    │   InputSystem → scoring │
+                    │  the site's own input   │
+                    │   system → scoring      │
                     └────────────────────────┘
 ```
 
 Data flow for one beatmap:
 
 ```
-Game detected → ParsedChart ─┐
+Site adapter → GameLike → ParsedChart ─┐
                              ├→ Humanizer.prepare()   (optional; per-note deltas
 ChartAnalysis ◄──────────────┘                          and release ceilings)
                              │
@@ -50,7 +51,7 @@ ChartAnalysis ◄──────────────┘                  
                     Timeline (InputAction[])
                              │
                              ▼
-                        Scheduler ────► ClockMapper (host ↔ chart time)
+                        Scheduler ────► live judgement-clock slope / ClockMapper fallback
                              │
                              ▼
                        InputManager
@@ -59,7 +60,7 @@ ChartAnalysis ◄──────────────┘                  
                  document KeyboardEvents
                              │
                              ▼
-            site's InputSystem.hit/release
+            site's input system (document / window capture)
                              │
                              ▼
             site's ScoreSystem → stats readback
@@ -73,10 +74,11 @@ the timeline and the scheduler. See
 
 | Module | Owns | Deliberately does *not* do |
 |---|---|---|
-| `detect/siteDetection` | "is this Web osu!mania?" | Anything about gameplay |
-| `detect/pixiHook` | Ordered acquisition strategies | Interpreting the game it finds |
-| `detect/fiber` | React fiber traversal, shape-based `Game` recognition | Any name-based coupling |
-| `detect/buildContext` | `Game` → `ParsedChart` + `KeyMapping` | Scheduling or input |
+| `detect/siteDetection` | "which supported site is this?" | Anything about gameplay |
+| `detect/pixiHook` | Site-specific ordered acquisition strategies | Interpreting the game it finds |
+| `detect/fiber` | WOM React fiber traversal, shape-based `Game` recognition | Any name-based coupling |
+| `detect/ashtonkAdapter` | `window.AshtonkMania` + `GameplayScreen.s` → `GameLike` | Scheduling, input, score submission, or enabling `AT` |
+| `detect/buildContext` | `GameLike` → `ParsedChart` + `KeyMapping` | Scheduling or input |
 | `detect/osuFileParser` | `.osu` text → chart (fallback) | Reading the live game |
 | `detect/chartSource` | Read-only `.osz` observation + minimal ZIP reader | Modifying any request |
 | `chart/timeline` | Chart → ordered `InputAction[]`, pattern analysis | Timing or input |
@@ -91,9 +93,29 @@ the timeline and the scheduler. See
 | `ui/*` | Overlay, keyboard view, debug panel | Touching the engine's internals |
 | `core/settings` | Persistence, validation, clamping | Knowing what settings mean |
 
-The rule throughout: **each layer only sees the types of the layer below it.**
-Nothing downstream of `buildContext` ever touches a site object, which is what
-makes the detection strategies independently replaceable.
+The rule throughout: **each layer only sees the shared contracts of the layer
+below it.** Downstream code uses `GameLike` rather than the site's native
+objects, which makes detection strategies independently replaceable.
+
+### Why a second site needs only an adapter
+
+Ashtonk!mania has no Pixi/React `Game`, stores notes as `{ col, time, end,
+isLN }`, installs input listeners on `window` capture, and judges against an
+AudioContext-derived `inputTime`. `src/detect/ashtonkAdapter.ts` projects the
+live session onto the same `GameLike` contract the engine already reads:
+`hitObjects`, `timeElapsed`, `state`, `columnKeybinds`, `scoreSystem`,
+`chartRevision`, `chartSignature` and `unsupportedReason`, plus an optional
+`chartTimeAtHost` judgement-clock predictor. A cheap revision catches session,
+engine and note-array replacements on the firing path; the 100ms monitor also
+checks the full layout fingerprint for in-place edits. Generic adapters without
+a revision retain their previous chart-rebuild behavior.
+
+There is still exactly one timeline, one `ClockMapper`, one `Scheduler`, one
+`InputManager`, one humanizer and one overlay. The adapter never calls the
+site's Auto (`AT`), replay feed, private judgement engine, or score submission.
+Replay, spectate and built-in Auto feeds are refused because the game ignores
+keyboard input during those feeds. Normal gameplay can trigger the game's own
+score-submission flow; see [`ASHTONK-CONTRACT.md`](./ASHTONK-CONTRACT.md).
 
 ## Design decisions worth knowing
 
@@ -113,6 +135,12 @@ So `timing/clock.ts` fits `chart = slope × host + intercept` over a sliding
 `confident` only once it has enough samples and a tight fit. `hostAt(target)`
 inverts the model, and that prediction is what timers are armed against.
 
+For Ashtonk!mania, the adapter additionally exposes the site's judgement clock
+at an arbitrary host timestamp. The engine estimates its current slope from two
+samples; the scheduler revises an armed deadline as speed changes and rechecks
+before firing. The least-squares `ClockMapper` remains the fallback for sites
+without that capability. Rate changes are not part of chart identity.
+
 Discontinuity detection is the subtle part. A **backward** chart jump is always
 a seek. A **forward** jump is ambiguous: a frame stall recovering also produces
 a large forward jump, but proportionally to elapsed host time, and those notes
@@ -128,16 +156,25 @@ An earlier version used `dChart > dHost * 8 + 250`, which misclassified a
 
 ### Why one rAF loop and not one timer per note
 
-The scheduler keeps a single `requestAnimationFrame` heartbeat. Each frame it:
+The scheduler keeps a single `requestAnimationFrame` heartbeat and at most one
+armed scheduler timer. Frames sample the clock, handle seeks, recover due actions
+and retarget accelerated deadlines. The timer is primed at start/resume, chains
+to the next batch without waiting for a frame, and rechecks its prediction at
+most a lookahead interval apart over long gaps. Thus slow rendering alone need
+not delay input when browser tasks and the game's judgement clock still run.
 
-1. samples the clock (and lets the clock model request a cursor resync),
-2. flushes anything already overdue, bounded by `MAX_CATCHUP_ACTIONS_PER_FRAME`,
-3. arms at most **one** timer for the next same-timestamp batch inside the
-   lookahead window.
+After a blocked-thread spike, the first timer or frame to wake uses the current
+clock. If more than `MAX_CATCHUP_ACTIONS_PER_FRAME` are overdue, the scheduler
+skips only the oldest overdue timestamp batches (never future actions) and
+reports the skipped actions. Input reconciliation releases held keys whose tails
+were skipped without releasing holds whose tails remain ahead. A detected seek
+likewise reconciles held keys before rebasing the cursor. No JavaScript can send
+events while the main thread is blocked: expired judgement windows may be
+missed, and the game may fail before recovery.
 
-That timer fires `spinThreshold` ms early, then busy-waits the remainder against
-an absolute deadline. Two independent budgets guard the spin: the deadline and a
-hard iteration cap, because the deadline derives from a *predicted* clock.
+Near a deadline the timer fires `spinThreshold` ms early, then busy-waits the
+remainder against an absolute deadline. Two independent budgets guard the
+spin: the deadline and a hard iteration cap.
 
 An earlier version computed the spin as `while (now() < now() + remaining)`.
 That reads as bounded but is not: if the clock does not advance (a frozen or
@@ -212,6 +249,23 @@ no-op on an unchanged value, so DOM writes are proportional to actual change.
 The debug panel buffers and flushes on an interval instead of appending per
 event, and when debug mode is off it allocates nothing at all.
 
+### UI motion without a second frame loop
+
+`ui/motion.ts` centralizes spring-inspired Bézier curves and timings. CSS handles
+interruptible panel, drawer and control transitions; it does not touch the
+scheduler. The sliders retain native range inputs for keyboard and accessibility
+semantics. A decorative thumb follows the same setting, easing clicks and resets
+but switching off positional transitions during pointer drags; window dragging
+and resizing also stay direct. Mirrored settings still update immediately.
+
+Only the height change between already-open tabs uses the Web Animations API. It
+samples unscaled layout heights, cancels and restarts from the current height on
+rapid tab changes, and cancels when the drawer or panel closes or the UI is
+uninstalled. `prefers-reduced-motion` disables new motion and finishes/cancels
+in-flight animations when the preference changes. ARIA and inert state are
+updated immediately, not at the end of an animation. There is no animation
+polling or per-frame JavaScript loop.
+
 ### Humanization: why it is baked into the timeline
 
 It would be simpler to perturb each action at fire time. That does not work, for
@@ -270,8 +324,10 @@ retrospectively, which made the counts depend on arrival order.
 
 ## Testing
 
-229 tests, `node --test`, no test framework dependency, plus a 28-check smoke test
-that runs the shipped bundle.
+Tests use `node --test` without a test framework, plus a smoke test that runs the
+shipped bundle. The Ashtonk!mania tests include an end-to-end run through the DOM
+stub's `document -> window` capture path and an optional offline Chromium test
+against the real game.
 
 Node strips TypeScript types natively (≥22.18) but still requires fully
 specified ESM paths, while the source uses extensionless imports (correct for a
@@ -287,7 +343,7 @@ playback rate, malformed input, rejection cases), timeline ordering and
 deduplication, clock fitting and discontinuity classification, scheduler
 ordering/batching/catch-up/seek/pause/stop, input dispatch including the jack
 regression, settings validation and persistence, seeded RNG distributions,
-humanization determinism and its ordering invariants, and 32 end-to-end tests that
+humanization determinism and its ordering invariants, and end-to-end tests that
 drive a stubbed site through the real engine — including "no stuck keys" on stop,
 emergency stop, dispose, play failure and game disappearance, and humanized
 playback across five seeds with holds, release variation, fatigue and drift all
